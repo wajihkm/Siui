@@ -1,0 +1,126 @@
+{
+  "name": "fire",
+  "title": "Fire",
+  "about": "Worlds are volcanoes, stages craters, cards sparks; the boss is the eruption.",
+  "words": {
+    "world": "volcano",
+    "worlds": "volcanoes",
+    "stage": "crater",
+    "step": "forge",
+    "card": "spark",
+    "boss": "eruption",
+    "roadmap": "ring of fire"
+  },
+  "events": {
+    "enemy": "flare",
+    "powerup": "fire stick",
+    "challenge": "lava flow",
+    "check": "torch",
+    "pipe": "vent",
+    "checkpoint": "hearth"
+  },
+  "glyphs": {
+    "enemy": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#ef4444\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#facc15\"/>",
+    "powerup": "<path d=\"M-8,10 L3,-2\" stroke=\"#78350f\" stroke-width=\"3.2\" stroke-linecap=\"round\"/><path d=\"M-6,8 L1,1\" stroke=\"#a16207\" stroke-width=\"1\" stroke-linecap=\"round\"/><path d=\"M4,-11 c4,4 6,7 6,9 a6,6 0 0 1 -12,0 c0,-2 2,-5 6,-9 z\" fill=\"#f97316\"/><path d=\"M4,-5 c2,2 3,3.5 3,4.5 a3,3 0 0 1 -6,0 c0,-1 1,-2.5 3,-4.5 z\" fill=\"#facc15\"/>",
+    "powerup-big": "<circle cx=\"2\" cy=\"-1\" r=\"11.5\" fill=\"#f97316\" fill-opacity=\".25\"/><path d=\"M-8,10 L3,-2\" stroke=\"#78350f\" stroke-width=\"3.2\" stroke-linecap=\"round\"/><path d=\"M-6,8 L1,1\" stroke=\"#a16207\" stroke-width=\"1\" stroke-linecap=\"round\"/><path d=\"M4,-11 c4,4 6,7 6,9 a6,6 0 0 1 -12,0 c0,-2 2,-5 6,-9 z\" fill=\"#f97316\"/><path d=\"M4,-5 c2,2 3,3.5 3,4.5 a3,3 0 0 1 -6,0 c0,-1 1,-2.5 3,-4.5 z\" fill=\"#facc15\"/>",
+    "challenge": "<path d=\"M-11,-6 h22\" stroke=\"#7c2d12\" stroke-width=\"3\"/><path d=\"M-11,2 q4,-6 8,0 t8,0 t6,0 v9 h-22 z\" fill=\"#ea580c\"/><path d=\"M-11,2 q4,-6 8,0 t8,0 t6,0\" fill=\"none\" stroke=\"#facc15\" stroke-width=\"1.6\"/>",
+    "check": "<path d=\"M-2,10 v-9 h4 v9 z\" fill=\"#78350f\"/><path d=\"M0,-11 c4,4 6,7 6,9 a6,6 0 0 1 -12,0 c0,-2 2,-5 6,-9 z\" fill=\"#f97316\"/><path d=\"M0,-5 c2,2 3,4 3,5 a3,3 0 0 1 -6,0 c0,-1 1,-3 3,-5 z\" fill=\"#facc15\"/>",
+    "pipe": "<rect x=\"-6\" y=\"-1\" width=\"12\" height=\"11\" rx=\"1\" fill=\"#44403c\"/><rect x=\"-9\" y=\"-6\" width=\"18\" height=\"6\" rx=\"1.5\" fill=\"#292524\"/><path d=\"M-3,-8 c0,-3 2,-3 2,-6 M2,-8 c0,-3 2,-3 2,-6\" fill=\"none\" stroke=\"#ef4444\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>",
+    "checkpoint": "<path d=\"M-10,10 v-9 l10,-9 l10,9 v9 z\" fill=\"var(--accent)\"/><path d=\"M0,8 c3,-2 4,-4 4,-6 a4,4 0 0 1 -8,0 c0,2 1,4 4,6 z\" fill=\"#facc15\"/>",
+    "boss": "<path d=\"M-12,11 L-4,-4 h8 L12,11 z\" fill=\"#44403c\"/><path d=\"M-4,-4 h8 l-1,-3 h-6 z\" fill=\"#ef4444\"/><path d=\"M0,-7 c-3,-4 -1,-7 0,-8 c1,1 3,4 0,8 z\" fill=\"#facc15\"/><path d=\"M-6,-8 l-2,-3 M6,-8 l2,-3\" stroke=\"#ef4444\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>",
+    "flag": "<path d=\"M-6,10 v-20\" stroke=\"var(--out)\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><path d=\"M-5,-10 l12,4 l-12,4 z\" fill=\"var(--out)\"/>",
+    "start": "<path d=\"M-1,10 v-10\" stroke=\"#78350f\" stroke-width=\"2.5\"/><circle cy=\"-2\" r=\"3.5\" fill=\"#ef4444\"/><path d=\"M0,-9 c2,2 2,5 0,6 c-2,-1 -2,-4 0,-6 z\" fill=\"#facc15\"/>",
+    "swords": "<g stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\"><path d=\"M0,-10 c4,4 7,8 7,11 a7,7 0 0 1 -14,0 c0,-3 3,-7 7,-11 z\"/><path d=\"M0,-2 c2,2 3,3 3,5 a3,3 0 0 1 -6,0 c0,-2 1,-3 3,-5 z\"/></g>",
+    "skip": "<path d=\"M-11,11 v-10 a11,11 0 0 1 22,0 v10 z\" fill=\"#44403c\"/><path d=\"M-7,11 v-6 a7,7 0 0 1 14,0 v6 z\" fill=\"#1c1917\"/><path d=\"M-4,-2 q1,4 0,7 M3,-1 q1,3 0,6\" stroke=\"#f97316\" stroke-width=\"1.6\" stroke-linecap=\"round\" fill=\"none\"/>",
+    "queue": "<rect x=\"-6\" y=\"-7\" width=\"12\" height=\"14\" rx=\"2\" fill=\"#fde68a\" stroke=\"#44403c\" stroke-width=\"1.4\"/><rect x=\"-7.5\" y=\"-10\" width=\"15\" height=\"3\" rx=\"1\" fill=\"#44403c\"/><rect x=\"-7.5\" y=\"7\" width=\"15\" height=\"3\" rx=\"1\" fill=\"#44403c\"/><path d=\"M-3,-10 a3,3 0 0 1 6,0\" fill=\"none\" stroke=\"#44403c\" stroke-width=\"1.5\"/><path d=\"M0,-4 c2,2 3,3.5 3,5 a3,3 0 0 1 -6,0 c0,-1.5 1,-3 3,-5 z\" fill=\"#f97316\"/>",
+    "side": "<path d=\"M-9,-2 a9,5 0 0 1 18,0 v4 a9,9 0 0 1 -18,0 z\" fill=\"#44403c\" stroke=\"#1c1917\" stroke-width=\"1.2\"/><ellipse cy=\"-2\" rx=\"9\" ry=\"5\" fill=\"#292524\" stroke=\"#1c1917\" stroke-width=\"1.2\"/><path d=\"M-11,-1 l-2,4 M11,-1 l2,4\" stroke=\"#1c1917\" stroke-width=\"2\" stroke-linecap=\"round\"/><path d=\"M-2,-6 c2,2 3,3 3,5 M2,-7 c1,2 1,3 0,4\" stroke=\"#f97316\" stroke-width=\"1.8\" stroke-linecap=\"round\" fill=\"none\"/>",
+    "abandoned": "<path d=\"M-2,10 v-7 h4 v7 z\" fill=\"#78350f\"/><path d=\"M-4,3 h8\" stroke=\"#1c1917\" stroke-width=\"2\" stroke-linecap=\"round\"/><path d=\"M0,1 c-3,-3 -1,-6 1,-8 c-3,0 -4,4 -1,8 M1,-2 c3,-2 2,-5 0,-7\" fill=\"none\" stroke=\"#9ca3af\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>"
+  },
+  "worlds": {
+    "scaffold": {
+      "name": "scaffold",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><rect x=\"-10.5\" y=\"0.5\" width=\"9.5\" height=\"9\" rx=\"1.5\" fill=\"#f59e0b\" stroke=\"#92400e\" stroke-width=\"1.2\"/><rect x=\"1\" y=\"0.5\" width=\"9.5\" height=\"9\" rx=\"1.5\" fill=\"#f59e0b\" stroke=\"#92400e\" stroke-width=\"1.2\"/><rect x=\"-4.75\" y=\"-9.5\" width=\"9.5\" height=\"9\" rx=\"1.5\" fill=\"#fbbf24\" stroke=\"#92400e\" stroke-width=\"1.2\"/></g>"
+    },
+    "hardening": {
+      "name": "hardening",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><path d=\"M0,-10 l9,3.5 v5 c0,5 -4,9 -9,11.5 c-5,-2.5 -9,-6.5 -9,-11.5 v-5 z\" fill=\"#3b82f6\"/><path d=\"M-4,0 l3,3 l5,-6\" fill=\"none\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></g>"
+    },
+    "theme": {
+      "name": "theme",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><path d=\"M0,-10 a10,10 0 1 0 0,20 c2,0 2,-3 1,-4 c-1,-2 1,-3 3,-3 h2 a4,4 0 0 0 4,-4 a10,10 0 0 0 -10,-9 z\" fill=\"#fde7c3\" stroke=\"#a16207\" stroke-width=\"1\"/><circle cx=\"-4\" cy=\"-4\" r=\"1.8\" fill=\"#ef4444\"/><circle cx=\"1\" cy=\"-6\" r=\"1.8\" fill=\"#eab308\"/><circle cx=\"-6\" cy=\"1.5\" r=\"1.8\" fill=\"#3b82f6\"/><circle cx=\"-2\" cy=\"5\" r=\"1.8\" fill=\"#16a34a\"/></g>"
+    },
+    "ux": {
+      "name": "ux",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><rect x=\"-11\" y=\"-8\" width=\"19\" height=\"11\" rx=\"5.5\" fill=\"#3b82f6\"/><rect x=\"-7.5\" y=\"-4.5\" width=\"8\" height=\"4\" rx=\"2\" fill=\"#fff\" opacity=\".9\"/><path d=\"M1,-2 l0,12 l3.5,-3 l2.5,5 l2,-1 l-2.5,-5 l4.5,0 z\" fill=\"#fff\" stroke=\"#1e293b\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/></g>"
+    },
+    "review": {
+      "name": "review",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><circle cx=\"-2\" cy=\"-2\" r=\"7\" fill=\"#bfdbfe\" stroke=\"#1d4ed8\" stroke-width=\"2.2\"/><path d=\"M3,3 l7,7\" stroke=\"#1d4ed8\" stroke-width=\"3\" stroke-linecap=\"round\"/></g>"
+    },
+    "test": {
+      "name": "test",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><path d=\"M-3,-10 h6 v6 l6,11 a1.5,1.5 0 0 1 -1.3,2.3 h-15.4 a1.5,1.5 0 0 1 -1.3,-2.3 l6,-11 z\" fill=\"#d9f99d\" stroke=\"#4d7c0f\" stroke-width=\"1.4\"/><path d=\"M-6.5,2 h13\" stroke=\"#4d7c0f\" stroke-width=\"1.4\"/></g>"
+    },
+    "security": {
+      "name": "security",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><rect x=\"-8\" y=\"-2\" width=\"16\" height=\"12\" rx=\"2.5\" fill=\"#f59e0b\"/><path d=\"M-5,-2 v-3 a5,5 0 0 1 10,0 v3\" fill=\"none\" stroke=\"#f59e0b\" stroke-width=\"2.5\"/><circle cx=\"0\" cy=\"4\" r=\"1.6\" fill=\"#78350f\"/></g>"
+    },
+    "grow": {
+      "name": "grow",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><path d=\"M0,11 c0,-5 0.5,-9 1,-12\" fill=\"none\" stroke=\"#1e8a4c\" stroke-width=\"2.6\" stroke-linecap=\"round\"/><path d=\"M1,-1 c-1,-7 -6,-10 -11.5,-10 c0,6 3,10.5 11.5,10\" fill=\"#1e8a4c\"/><path d=\"M0.5,-1.5 c-3,-4 -6,-6 -9,-7\" fill=\"none\" stroke=\"var(--panel)\" stroke-width=\"1.2\" stroke-linecap=\"round\"/><path d=\"M1,-1 c0,-9 5,-13 11.5,-13 c0.5,8 -3,13 -11.5,13\" fill=\"#1e8a4c\"/><path d=\"M1.5,-1.5 c2.5,-5 6,-8 9.5,-10\" fill=\"none\" stroke=\"var(--panel)\" stroke-width=\"1.2\" stroke-linecap=\"round\"/></g>"
+    },
+    "adhoc": {
+      "name": "adhoc",
+      "svg": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\" fill=\"#f97316\"/><path d=\"M0,-3 c3,3 4,5 4,7 a4,4 0 0 1 -8,0 c0,-2 1,-4 4,-7 z\" fill=\"#fde68a\"/><g transform=\"translate(5.5,5.5) scale(0.5)\"><circle r=\"11\" fill=\"var(--panel)\" fill-opacity=\".85\"/><path d=\"M0,-11 l2,0 l0.6,2.4 a7,7 0 0 1 2.2,0.9 l2.1,-1.3 l1.4,1.4 l-1.3,2.1 a7,7 0 0 1 0.9,2.2 l2.4,0.6 l0,2 l-2.4,0.6 a7,7 0 0 1 -0.9,2.2 l1.3,2.1 l-1.4,1.4 l-2.1,-1.3 a7,7 0 0 1 -2.2,0.9 l-0.6,2.4 l-2,0 l-0.6,-2.4 a7,7 0 0 1 -2.2,-0.9 l-2.1,1.3 l-1.4,-1.4 l1.3,-2.1 a7,7 0 0 1 -0.9,-2.2 l-2.4,-0.6 l0,-2 l2.4,-0.6 a7,7 0 0 1 0.9,-2.2 l-1.3,-2.1 l1.4,-1.4 l2.1,1.3 a7,7 0 0 1 2.2,-0.9 z\" fill=\"#64748b\"/><circle r=\"3\" fill=\"var(--panel)\"/></g>"
+    }
+  },
+  "palette": {
+    "light": {
+      "--accent": "#c2410c",
+      "--out": "#16a34a",
+      "--road": "#f59e0b",
+      "--road-edge": "#b45309",
+      "--road-line": "rgba(255,255,255,.8)",
+      "--field": "#fef3c7",
+      "--field-dark": "#fde68a",
+      "--stone": "#fed7aa",
+      "--stone-2": "#fdba74",
+      "--stone-3": "#fff7ed",
+      "--stone-edge": "#fdba74",
+      "--bg": "#fbeee2",
+      "--panel": "#ffffff",
+      "--line": "#f0d6c2"
+    },
+    "dark": {
+      "--bg": "#1a1210",
+      "--panel": "#241a16",
+      "--line": "#3a2a24",
+      "--accent": "#fb923c",
+      "--out": "#4ade80",
+      "--road": "#9a3412",
+      "--road-edge": "#431407",
+      "--road-line": "rgba(255,255,255,.5)",
+      "--field": "#2a1711",
+      "--field-dark": "#44231a",
+      "--stone": "#44231a",
+      "--stone-2": "#5c2e1f",
+      "--stone-3": "#ea580c",
+      "--stone-edge": "#5c2e1f"
+    }
+  },
+  "shapes": {
+    "tileRx": 10,
+    "tileMotif": "<path d=\"M0,-11 c5,5 8,9 8,13 a8,8 0 0 1 -16,0 c0,-4 3,-8 8,-13 z\"/>",
+    "route": {
+      "edge": 10,
+      "fill": 7,
+      "line": 1.5,
+      "lineDash": "1 5"
+    },
+    "scene": "embers"
+  },
+  "toggle": {
+    "name": "Torch",
+    "svg": "<path d=\"M-2,10 v-7 h4 v7 z\"/><path d=\"M0,-11 c4,4 6,7 6,9 a6,6 0 0 1 -12,0 c0,-2 2,-5 6,-9 z\"/>"
+  }
+}

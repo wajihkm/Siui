@@ -1,0 +1,6 @@
+{
+  "name": "siui",
+  "owner": { "name": "Wajih Kammoun" },
+  "description": "Claude Code mods that are easier on the eyes: decisions as cards, one at a time",
+  "plugins": [{ "name": "siui", "source": "./siui" }]
+}

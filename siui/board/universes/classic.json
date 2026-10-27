@@ -1,0 +1,27 @@
+{
+  "name": "classic",
+  "title": "Classic",
+  "about": "The Mario-like look: worlds, stages, castles and warp pipes.",
+  "words": {
+    "world": "world",
+    "stage": "stage",
+    "step": "step",
+    "card": "card",
+    "boss": "boss",
+    "roadmap": "roadmap"
+  },
+  "events": {},
+  "glyphs": {},
+  "worlds": {},
+  "palette": {},
+  "shapes": {
+    "tileRx": 14,
+    "route": {
+      "edge": 16,
+      "fill": 13,
+      "line": 2,
+      "lineDash": "9 9"
+    },
+    "scene": "field"
+  }
+}
