@@ -17,16 +17,15 @@ siui@siui`; from a clone, `/plugin marketplace add` with the clone's folder firs
 in a project:
 
 ```
-/siui on demo-1-scaffold     the first card of the demo's "new project" pack
+/siui on scaffold            the first card of the bundled "new project" pack
 /siui on                     the mode for whatever you describe next
 /siui board                  the board in the browser
 ```
 
 Every `/siui` command also answers to `/game`. A pack is a markdown file of levels and
-cards; the plugin ships three demos, `demo-1-scaffold`, `demo-2-hardening` and
-`demo-3-ux`, and a project adds its own. Answer each card with a button, or type your own
-words under Other; `?` there opens the explanation. The record grows in
-`.claude/decisions.json`.
+cards; the plugin ships one, `scaffold`, which sets up a new project, and a project
+writes its own. Answer each card with a button, or type your own words under Other; `?`
+there opens the explanation. The record grows in `.claude/decisions.json`.
 
 ## Requirements
 
@@ -162,11 +161,12 @@ read before the level's first card and the outputs the level's answers will chan
 last level is the boss. The pack gives the skeleton; the model writes the short line, the
 effects and the explanation from what it reads in the project. The format is in
 [../skills/decision-cards/packs/README.md](../skills/decision-cards/packs/README.md); the
-plugin ships three demo worlds, [demo/README.md](demo/README.md).
+plugin ships one pack, [packs/scaffold.md](packs/scaffold.md): identity, structure and
+quality of a new project, then the boss creates the files decided.
 
 `/siui on <pack>` looks for the pack in four places, in order: the project's
 `.claude/skills/decision-cards/packs/`, the folders the configuration names under `packs`
-(relative to the project, or absolute), the plugin's `demo/packs/`, then
+(relative to the project, or absolute), the plugin's `packs/`, then
 `~/.claude/skills/decision-cards/packs/`. The number in a pack's name is a suggestion; a
 run takes the project's next world number.
 

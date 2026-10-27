@@ -91,7 +91,7 @@ export function packCandidates(
     const absolute = folder.startsWith('/') ? folder : `${base}/${folder}`
     paths.push(`${absolute.replace(/\/$/, '')}/${name}.md`)
   }
-  paths.push(`${pluginRoot.replace(/\/$/, '')}/demo/packs/${name}.md`)
+  paths.push(`${pluginRoot.replace(/\/$/, '')}/packs/${name}.md`)
   if (home) paths.push(`${home}/.claude/skills/decision-cards/packs/${name}.md`)
 
   return paths

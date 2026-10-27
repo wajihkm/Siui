@@ -32,9 +32,8 @@ status read the levels ahead from them. The last level is the boss.
 
 ## Where packs live
 
-This folder holds the format; the packs themselves are the plugin's three demos in
-`siui/demo/packs/` (`demo-1-scaffold`, `demo-2-hardening`, `demo-3-ux`) and the ones a
-project writes: in its `.claude/skills/decision-cards/packs/`, in its `skills/decision-cards/packs/`,
+This folder holds the format; the packs themselves are the plugin's `scaffold` in
+`siui/packs/`, which sets up a new project, and the ones a project writes: in its `.claude/skills/decision-cards/packs/`, in its `skills/decision-cards/packs/`,
 in the folders its `.claude/siui.json` names under `packs`, or in
 `~/.claude/skills/decision-cards/packs/`. The number in a pack's name is a suggestion; a run
 takes the project's next world number.

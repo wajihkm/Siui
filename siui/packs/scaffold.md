@@ -1,4 +1,4 @@
-# Demo 1: a new project
+# Scaffold: a new project
 
 For an empty or young folder that will hold one project. Four levels; the boss applies.
 `changelog:` none.
@@ -59,6 +59,5 @@ One card: every decision of the world, one line per level; options "Apply", "Cha
 "Stop". Its outputs are every output of the three levels. On Apply: create only the files
 the answers call for (a README with the purpose line, the license file, the folders of the
 layout, the test and lint config chosen, the CI file if chosen), then finish the world.
-Then one closing info card: "World 1 complete" with the options "Stop" and "Next:
-hardening". The next pack is `demo-2-hardening`; the run takes the project's next world
-number whatever the pack's name says.
+Then one closing info card: "World complete" with the option "OK". The run takes the
+project's next world number; the project's own packs carry on from there.

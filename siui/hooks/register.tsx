@@ -464,7 +464,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     return { text: `Run ${run.id} closed. \`/siui on <pack>\` starts a new one.` }
   }
 
-  return { text: `Usage: /siui ${USAGE} (also /game). Packs: the plugin's demo, or the project's .claude/skills/decision-cards/packs.` }
+  return { text: `Usage: /siui ${USAGE} (also /game). Packs: the plugin's scaffold, or the project's .claude/skills/decision-cards/packs.` }
 }
 // The project's configuration, read at the session's start and on `/siui on`; module-level so the
 // command handler, a top-level function, can read it (a hot reload resets it; session.start re-reads).

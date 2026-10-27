@@ -83,7 +83,7 @@ Consequences:
   1 MIT — anyone may use it; no patent clause
   2 Apache-2.0 — adds a patent grant; longer file
 Remaining in 1-1: versioning, purpose line
-In: ━ README.md · ┄ packs/demo-1-scaffold.md  |  Out: ━ LICENSE (new) · ┄ README.md
+In: ━ README.md · ┄ packs/scaffold.md  |  Out: ━ LICENSE (new) · ┄ README.md
 Answer 1-2, or type your own.
 ```
 
@@ -98,7 +98,7 @@ cloud, the outputs in a row, with solid or dashed edges.
 
 ```json
 { "format": 1, "runs": [ { "id": "<project>/world-1", "target": "<project>",
-  "pack": "demo-1-scaffold", "world": 1, "startedAt": "2026-10-21", "finishedAt": null,
+  "pack": "scaffold", "world": 1, "startedAt": "2026-10-21", "finishedAt": null,
   "levels": { "1-1": "done", "1-2": "open" },
   "decisions": [ { "level": "1-1", "id": "license", "title": "License", "answer": "MIT",
     "isOther": false, "at": "2026-10-21T12:00:00Z",

@@ -4,8 +4,8 @@ Siui is the Claude Code plugin marketplace `siui`: mods that are easier on the e
 Siui (Super intelligent Ui) is its plugin: the assistant's questions drawn as decision
 cards, one at a time, in levels and worlds like a game, with a board that maps the run.
 decision-cards is the skill, kept outside the plugin in `skills/decision-cards/`: the
-rules and the record, which also work with no plugin at all. The plugin ships three demo
-worlds; a project writes its own packs.
+rules and the record, which also work with no plugin at all. The plugin ships one pack,
+`scaffold`, for a new project; a project writes its own.
 
 ## Quick start
 
@@ -20,8 +20,8 @@ From a clone instead: `git clone https://github.com/wajihkm/siui.git`, then
 project:
 
 ```
-/siui on demo-1-scaffold     the first card of the demo's "new project" pack; a pack is a
-                             markdown file of levels and cards, and the plugin ships three
+/siui on scaffold            the first card of the "new project" pack; a pack is a
+                             markdown file of levels and cards, and the plugin ships one
                              answer each card: a button, or your own words under Other
 /siui board                  the board in the browser: roadmap, maps, steps, files
 ```
@@ -67,14 +67,14 @@ every command, the board, the universes, the record and the configuration.
 `skills/decision-cards/SKILL.md` is the same protocol for an assistant that has no card
 tool: the rules, a text card format, the record and the pack format. Copy the folder into
 a project's `.claude/skills/` or into `~/.claude/skills/`; the packs it runs are the
-plugin's demos or your own.
+plugin's `scaffold` or your own.
 
 | Part | Where |
 |---|---|
 | The plugin | [siui/](siui/README.md) |
 | The skill | [skills/decision-cards/SKILL.md](skills/decision-cards/SKILL.md) |
 | The pack format | [skills/decision-cards/packs/README.md](skills/decision-cards/packs/README.md) |
-| The demo packs | [siui/demo/README.md](siui/demo/README.md) |
+| The bundled pack | [siui/packs/scaffold.md](siui/packs/scaffold.md) |
 
 ## License
 

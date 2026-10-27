@@ -144,7 +144,7 @@ class Board:
         """Where packs may be: the project's skill, its configured folders, the plugin's bundled skill."""
         folders = [
             os.path.join(self.root, ".claude", "skills", "decision-cards", "packs"),
-            os.path.join(HERE, "..", "demo", "packs"),
+            os.path.join(HERE, "..", "packs"),
         ]
         config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
         for extra in config.get("packs", []) if isinstance(config, dict) else []:
