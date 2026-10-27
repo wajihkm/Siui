@@ -1,11 +1,22 @@
 {
   "name": "siui",
   "version": "1.0.0",
-  "description": "Decisions as cards: one question at a time, in levels and worlds, with source links and a record in the project",
-  "author": { "name": "Wajih Kammoun", "url": "https://github.com/wajihkm" },
+  "description": "Decisions as cards: one question at a time, in levels and worlds, with a board that maps the run (Mario style)",
+  "author": {
+    "name": "Wajih Kammoun",
+    "url": "https://github.com/wajihkm"
+  },
   "license": "MIT",
   "repository": "https://github.com/wajihkm/siui",
   "homepage": "https://github.com/wajihkm/siui#readme",
-  "keywords": ["decision cards", "game mode", "question dialog", "board", "eye strain", "planning"],
+  "keywords": [
+    "decision cards",
+    "game mode",
+    "question dialog",
+    "board",
+    "eye strain",
+    "planning",
+    "mario"
+  ],
   "types": "./types/index.d.ts"
 }
