@@ -161,8 +161,8 @@ read before the level's first card and the outputs the level's answers will chan
 last level is the boss. The pack gives the skeleton; the model writes the short line, the
 effects and the explanation from what it reads in the project. The format is in
 [../skills/decision-cards/packs/README.md](../skills/decision-cards/packs/README.md); the
-plugin ships one pack, [packs/scaffold.md](packs/scaffold.md): identity, structure and
-quality of a new project, then the boss creates the files decided.
+plugin ships one pack, [packs/scaffold.md](packs/scaffold.md): identity, stack, structure
+and quality of a new project, then the boss creates the files decided.
 
 `/siui on <pack>` looks for the pack in four places, in order: the project's
 `.claude/skills/decision-cards/packs/`, the folders the configuration names under `packs`
