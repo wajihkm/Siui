@@ -63,6 +63,9 @@ def write_json(path, data):
                 pass
 
 
+PACK_NAME = re.compile(r"^[a-z0-9-]{2,60}$")
+
+
 def stamp_of(path):
     """A file's change mark for /head: its mtime in ns and its size; 0 when it is not there."""
     try:
@@ -142,22 +145,26 @@ class Board:
         return name in LOCAL_NAMES
 
     def pack_folders(self):
-        """Where packs may be: the project's skill, its configured folders, the plugin's bundled skill."""
+        """Where packs may be, each with whose it is: the project's skill and its configured folders ("project"), the
+        plugin's bundled packs ("plugin"), the home folder's skill ("home")."""
         folders = [
-            os.path.join(self.root, ".claude", "skills", "decision-cards", "packs"),
-            os.path.join(HERE, "..", "packs"),
+            (os.path.join(self.root, ".claude", "skills", "decision-cards", "packs"), "project"),
+            (os.path.join(HERE, "..", "packs"), "plugin"),
         ]
         config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
         for extra in config.get("packs", []) if isinstance(config, dict) else []:
             if isinstance(extra, str) and extra and ".." not in extra:
-                folders.append(extra if os.path.isabs(extra) else os.path.join(self.root, extra))
+                folders.append((extra if os.path.isabs(extra) else os.path.join(self.root, extra), "project"))
+        home = os.path.expanduser("~")
+        if home and home != "~":
+            folders.append((os.path.join(home, ".claude", "skills", "decision-cards", "packs"), "home"))
         seen, out = set(), []
-        for folder in folders:
+        for folder, source in folders:
             real = os.path.realpath(folder)
             if real in seen or not os.path.isdir(real):
                 continue
             seen.add(real)
-            out.append(real)
+            out.append((real, source))
         return out
 
     UNIVERSE_NAME = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -215,6 +222,48 @@ class Board:
             except OSError as error:
                 return {"ok": False, "error": str(error)}
         return {"ok": True, "name": name}
+
+    def hide_pack(self, body):
+        """Keeps a pack off the roadmap, or shows it again: `hiddenPacks` in the configuration. /siui on still runs it."""
+        name = str(body.get("name") or "").strip()
+        if not PACK_NAME.match(name):
+            return {"ok": False, "error": "a pack name is required"}
+        hide = bool(body.get("hidden", True))
+        path = os.path.join(self.root, ".claude", "siui.json")
+        with self.lock:
+            config = read_json(path, {})
+            if not isinstance(config, dict):
+                config = {}
+            given = config.get("hiddenPacks") if isinstance(config.get("hiddenPacks"), list) else []
+            names = [one for one in given if isinstance(one, str) and one != name]
+            if hide:
+                names.append(name)
+            if names:
+                config["hiddenPacks"] = names
+            else:
+                config.pop("hiddenPacks", None)
+            try:
+                write_json(path, config)
+            except OSError as error:
+                return {"ok": False, "error": str(error)}
+        return {"ok": True, "name": name, "hidden": hide}
+
+    def delete_pack(self, body):
+        """Deletes a pack file of the project's own; the plugin's and the home folder's packs are not touched."""
+        name = str(body.get("name") or "").strip()
+        if not PACK_NAME.match(name):
+            return {"ok": False, "error": "a pack name is required"}
+        pack = next((one for one in self.packs() if one["name"] == name), None)
+        if pack is None:
+            return {"ok": False, "error": "no such pack"}
+        if pack["source"] != "project":
+            return {"ok": False, "error": "not the project's pack: hide it instead"}
+        with self.lock:
+            try:
+                os.remove(pack["path"])
+            except OSError as error:
+                return {"ok": False, "error": str(error)}
+        return {"ok": True, "name": name, "path": pack["path"]}
 
     def move(self, body):
         """Moves a mark, or a chat, skipped or side-quest decision, to another world and stage: the step's Move buttons."""
@@ -325,13 +374,21 @@ class Board:
         self.prompt({"text": f"On the board I abandoned world {world}: it is closed as abandoned; its answers stay. Clear the status line and do not go on with its cards."})
         return {"ok": True}
 
+    def hidden_packs(self):
+        """The packs the configuration keeps off the roadmap: `hiddenPacks` in .claude/siui.json."""
+        config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
+        given = config.get("hiddenPacks") if isinstance(config, dict) else None
+        return {one for one in given if isinstance(one, str)} if isinstance(given, list) else set()
+
     def packs(self):
-        """Every pack found, with its title, suggested world and plan (levels and cards)."""
+        """Every pack found, with its title, suggested world, plan (levels and cards), whose folder it is in and
+        whether the roadmap hides it."""
         heading = re.compile(r"^##\s+Level\s+(\d+-\d+)\s*[·:-]\s*(.+?)(?:\s*\((\d+)\s+cards?\))?\s*$")
         card_row = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|\s*([^|]+?)\s*\|")
         title_line = re.compile(r"^#\s+(?:World\s+(\d+)\s*:\s*)?(.+?)\s*$")
+        hidden = self.hidden_packs()
         found, names = [], set()
-        for folder in self.pack_folders():
+        for folder, source in self.pack_folders():
             for path in sorted(glob.glob(os.path.join(folder, "*.md"))):
                 name = os.path.basename(path)[:-3]
                 if name == "README" or name in names:
@@ -341,7 +398,8 @@ class Board:
                         lines = handle.read().split("\n")
                 except OSError:
                     continue
-                pack = {"name": name, "title": name, "world": None, "levels": [], "path": path}
+                pack = {"name": name, "title": name, "world": None, "levels": [], "path": path,
+                        "source": source, "hidden": name in hidden}
                 current = None
                 for line in lines:
                     first = title_line.match(line) if pack["title"] == name and line.startswith("# ") else None
@@ -955,6 +1013,8 @@ def make_handler(board):
                 "/move": board.move,
                 "/queue": board.queue,
                 "/abandon": board.abandon,
+                "/pack-hide": board.hide_pack,
+                "/pack-delete": board.delete_pack,
                 "/export": board.export,
             }
             action = routes.get(route)

@@ -280,6 +280,8 @@ is for the board and need not be committed.
   project's skill folder and before the plugin's bundled one.
 - `boardPort` is the board server's first port (1024 to 65535).
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
+- `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
+  Hide button on a planned world writes it, its hidden button clears it.
 - `theme` is written by the theme world's boss and the board's menu. The page applies
   `scheme` (`light` or `dark`; anything else follows the system; the page's own ◐ button
   overrides it and is kept), `size` (the base text size in px), `corners` (`pill`, `soft`

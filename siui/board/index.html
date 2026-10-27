@@ -564,9 +564,23 @@
     const runs = record && record.runs ? record.runs : [];
     const used = new Set(runs.map(r => r.pack));
     const next = runs.reduce((m, r) => Math.max(m, r.world), 0) + 1;
-    return ((state && state.packs) || []).filter(p => !used.has(p.name)).map((p, i) => ({
+    return ((state && state.packs) || []).filter(p => !used.has(p.name) && !p.hidden).map((p, i) => ({
       id: 'pack:' + p.name, isPack: true, pack: p.name, title: p.title, world: p.world || next + i,
-      finishedAt: null, levels: {}, plan: p.levels, decisions: [], path: p.path,
+      finishedAt: null, levels: {}, plan: p.levels, decisions: [], path: p.path, source: p.source,
+    }));
+  }
+  /** The packs the roadmap hides, as a button that shows them again; nothing when none. */
+  function hiddenPacksHtml() {
+    const hidden = ((state && state.packs) || []).filter(p => p.hidden);
+    if (!hidden.length) return '';
+    return `<button class="small" data-unhide title="Hidden from the ${esc(w('roadmap'))}: ${esc(hidden.map(p => p.name).join(', '))} · click to show them again">${hidden.length} hidden</button>`;
+  }
+  function wireUnhide(el) {
+    el.querySelectorAll('[data-unhide]').forEach(b => b.addEventListener('click', async () => {
+      const hidden = ((state && state.packs) || []).filter(p => p.hidden);
+      if (!(await ask(`Show ${hidden.length === 1 ? 'the hidden pack' : 'the ' + hidden.length + ' hidden packs'} on the ${w('roadmap')} again? ${hidden.map(p => p.name).join(', ')}`, { ok: 'Show' }))) return;
+      for (const p of hidden) if (!(await post('/pack-hide', { name: p.name, hidden: false }))) return;
+      toast('Shown again');
     }));
   }
 
@@ -990,8 +1004,9 @@
     const tone = r => r.isPack ? 'var(--dash)' : ({ finished: 'var(--accent)', progress: 'var(--out)', new: 'var(--dash)', abandoned: 'var(--warn)' })[runState(r).key];
     // An empty record: a line instead of a blank drawing; the New button still starts a world.
     if (!worlds.length) {
-      el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span><button class="small" data-new>+ New ${esc(w('world'))}</button></h2><div class="empty">No ${esc(w('world'))} yet. In the chat: /game on &lt;pack&gt;, or + New ${esc(w('world'))} here.</div>`;
+      el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span>${hiddenPacksHtml()}<button class="small" data-new>+ New ${esc(w('world'))}</button></h2><div class="empty">No ${esc(w('world'))} yet. In the chat: /game on &lt;pack&gt;, or + New ${esc(w('world'))} here.</div>`;
       el.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => openNewWorld(nextWorld)));
+      wireUnhide(el);
       return;
     }
     let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="roadmap of worlds"><defs><marker id="rm-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9 z" fill="var(--dash)"/></marker></defs>`;
@@ -1077,9 +1092,10 @@
     svg += '</svg>';
     const sideOpen = side ? eventsOf(0).filter(ev => ev.status === 'open' && ev.kind !== 'checkpoint').length : 0;
     const sideBadge = side ? `<button class="sidequests${shown && shown.id === side.id ? ' selected' : ''}" data-run="${esc(side.id)}" type="button" title="Side quests: decisions after a boss that belong to no stage, kept by month · ${(side.decisions || []).length} decisions${sideOpen ? ` · ${sideOpen} open on the map` : ''}. Click to show it."><span class="disc">${iconHtml('side', 28)}${sideOpen ? `<span class="bubble">${sideOpen}</span>` : ''}</span><span class="lbl">Side quests</span></button>` : '';
-    el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span><button class="small" data-new>+ New ${esc(w('world'))}</button></h2>` + svg + (sideBadge ? `<div class="roadfoot">${sideBadge}</div>` : '');
+    el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span>${hiddenPacksHtml()}<button class="small" data-new>+ New ${esc(w('world'))}</button></h2>` + svg + (sideBadge ? `<div class="roadfoot">${sideBadge}</div>` : '');
     el.querySelectorAll('.sidequests[data-run], .tile[data-run]').forEach(b => b.addEventListener('click', () => { selectRun(b.dataset.run); render(true); }));
     el.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => openNewWorld(nextWorld)));
+    wireUnhide(el);
   }
 
   /** The worlds this page has drawn so far, so a new one can be told apart and born with a bounce. */
@@ -1447,8 +1463,21 @@
     if (run.isPack) {
       const n = (run.plan || []).reduce((m, l) => m + (l.cards || []).length, 0);
       el.innerHTML = `<h2>${worldIconHtml(run, 16)} <span class="ttl">${esc(Wc('world'))} ${esc(run.world)} · ${esc(run.title)}</span> <span class="badge">not started</span> <span class="sub">${(run.plan || []).length} ${esc(ws('stage'))} · ${n} ${esc(ws('card'))}</span></h2>${svg}` +
-        `<div class="tools"><span>Pack <code>${esc(run.pack)}</code></span><span class="spacer"></span><button class="small primary" data-start="${esc(run.pack)}">Start this ${esc(w('world'))}</button></div>`;
+        `<div class="tools"><span>Pack <code>${esc(run.pack)}</code>${run.source === 'plugin' ? ' <span class="g">bundled with the plugin</span>' : run.source === 'home' ? ' <span class="g">from ~/.claude</span>' : ''}</span><span class="spacer"></span>` +
+        `<button class="small" data-hide="${esc(run.pack)}" title="Take this pack off the ${esc(w('roadmap'))}; /siui on ${esc(run.pack)} still runs it, and the ${esc(w('roadmap'))}'s hidden button brings it back">Hide</button>` +
+        (run.source === 'project' ? `<button class="small" data-delete-pack="${esc(run.pack)}" title="Delete the pack file ${esc(run.path || '')}">Delete the pack</button>` : '') +
+        `<button class="small primary" data-start="${esc(run.pack)}">Start this ${esc(w('world'))}</button></div>`;
       el.querySelectorAll('.stop').forEach(g => g.addEventListener('click', () => { selectLevel(run, g.dataset.level); render(true); }));
+      el.querySelector('[data-hide]').addEventListener('click', async e => {
+        const pack = e.currentTarget.dataset.hide;
+        if (!(await ask(`Hide the pack ${pack} from the ${w('roadmap')}? It stays on disk; /siui on ${pack} still runs it.`, { ok: 'Hide' }))) return;
+        if (await post('/pack-hide', { name: pack, hidden: true })) { toast('Hidden'); selectRun(''); }
+      });
+      el.querySelectorAll('[data-delete-pack]').forEach(b => b.addEventListener('click', async () => {
+        const pack = b.dataset.deletePack;
+        if (!(await ask(`Delete the pack file of ${pack}? ${run.path || ''} is removed from disk; nothing was recorded for it.`, { ok: 'Delete' }))) return;
+        if (await post('/pack-delete', { name: pack })) { toast('Pack deleted'); selectRun(''); }
+      }));
       el.querySelector('[data-start]').addEventListener('click', async e => {
         const pack = e.currentTarget.dataset.start;
         if (await post('/prompt', { text: `Start the pack ${pack} as world ${run.world}: read the pack${run.path ? ` at ${run.path}` : ''}, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${run.world} on every card. No text before the card.` })) toast('Asked the chat to start it');
