@@ -403,6 +403,9 @@
   .md pre, .outbody .assistant pre { background: color-mix(in srgb, var(--text) 6%, transparent); padding: 10px 12px; border-radius: 8px; overflow: auto; margin: 6px 0 10px; }
   .md pre code, .outbody .assistant pre code { background: none; padding: 0; }
   .md hr, .outbody .assistant hr { border: 0; border-top: 1px dashed var(--line); margin: 12px 0; }
+  .md table, .outbody .assistant table { border-collapse: collapse; margin: 6px 0 10px; font-size: 14px; max-width: 100%; }
+  .md th, .md td, .outbody .assistant th, .outbody .assistant td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .md th, .outbody .assistant th { color: var(--dim); font-weight: 600; font-size: 12px; }
   .md a, .outbody .assistant a { color: var(--accent); }
   /* A card waiting: two moving signals only, the card frame's glow and the ring on the map's stop; everything else turns purple and stays still. */
   @keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 var(--wait-glow); } 50% { box-shadow: 0 0 0 10px transparent; } }
@@ -552,7 +555,23 @@
     let para = [], list = null, fence = null;
     const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; } };
     const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`); list = null; } };
-    for (const raw of String(text || '').replace(/\r\n?/g, '\n').split('\n')) {
+    const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+    const isSeparator = row => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(row || '');
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      const raw = lines[i];
+      // A table: a header row, a separator row, then rows, each starting with a bar.
+      if (fence === null && /^\s*\|/.test(raw) && isSeparator(lines[i + 1])) {
+        flushPara(); flushList();
+        const aligns = cells(lines[i + 1]).map(c => /^:-+:$/.test(c) ? 'center' : /-+:$/.test(c) ? 'right' : '');
+        const td = (c, j, tag) => `<${tag}${aligns[j] ? ` style="text-align:${aligns[j]}"` : ''}>${inline(c)}</${tag}>`;
+        let html = `<table><thead><tr>${cells(raw).map((c, j) => td(c, j, 'th')).join('')}</tr></thead><tbody>`;
+        i += 2;
+        for (; i < lines.length && /^\s*\|/.test(lines[i]); i += 1) html += `<tr>${cells(lines[i]).map((c, j) => td(c, j, 'td')).join('')}</tr>`;
+        i -= 1;
+        out.push(html + '</tbody></table>');
+        continue;
+      }
       if (fence !== null) {
         if (/^\s*```/.test(raw)) { out.push(`<pre><code>${esc(fence.join('\n'))}</code></pre>`); fence = null; } else fence.push(raw);
         continue;
