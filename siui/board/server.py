@@ -126,6 +126,7 @@ class Board:
         self.ports = range(args.port, args.port + PORT_SPAN)
         self.lock = threading.Lock()  # held around every read-modify-write of the record and the configuration
         self.last_record = None  # the text of the last record that parsed, for a poll that lands on a half-written file
+        self.record_missing_since = None  # when the record file vanished, for the grace that covers a git reset
         self._git_identity = None  # the -c identity options, found once
         os.makedirs(self.run, exist_ok=True)
 
@@ -388,9 +389,26 @@ class Board:
     def record_path(self):
         return os.path.join(self.root, self.record)
 
+    RECORD_GRACE = 2.0  # seconds a vanished record is still shown: the time git takes to reset the tree
+
+    def record_gone(self):
+        """Whether the record file is missing for longer than the grace: deleted, not just being replaced. Keeps the
+        time it vanished; past the grace the last copy is dropped, so a record written later starts from the file."""
+        if os.path.exists(self.record_path()):
+            self.record_missing_since = None
+            return False
+        now = time.monotonic()
+        if self.record_missing_since is None:
+            self.record_missing_since = now
+        if now - self.record_missing_since < self.RECORD_GRACE:
+            return False
+        self.last_record = None
+        return True
+
     def read_record(self, default=None, fresh=False):
         """The record; when the file is unreadable or not JSON (half-written, or gone for a moment while git resets
-        the tree), the last one that parsed, so one poll does not blank the page. The default only before any did.
+        the tree), the last one that parsed, so one poll does not blank the page. The default only before any did,
+        and once the file has been gone past the grace: a deleted record is an empty board, not the last one shown.
         An edit asks for a fresh one: None then, so a stale copy is never written over the file."""
         try:
             with open(self.record_path(), encoding="utf-8") as handle:
@@ -399,7 +417,10 @@ class Board:
         except (OSError, ValueError):
             if fresh:
                 return None
+            if self.record_gone():
+                return default
             return json.loads(self.last_record) if self.last_record is not None else default
+        self.record_missing_since = None
         if isinstance(record, dict):
             self.last_record = text
         return record
@@ -432,6 +453,9 @@ class Board:
             if os.path.isdir(folder):
                 paths.extend(os.path.join(folder, name) for name in sorted(os.listdir(folder)) if name.endswith(".json"))
         parts = [stamp_of(path) for path in paths] + ["1" if self.session_alive() else "0"]
+        # A record that vanished moves the stamp once more when its grace runs out, so the page fetches the empty board.
+        if not os.path.exists(self.record_path()):
+            parts.append("gone" if self.record_gone() else "grace")
         status = read_json(self.path("status.json"), None)
         return {"v": hashlib.sha1(":".join(parts).encode("utf-8")).hexdigest()[:16],
                 "status": status if isinstance(status, dict) else None, "alive": self.session_alive()}
