@@ -208,7 +208,9 @@ export function normaliseCard(input: Record<string, unknown>, caps: Caps = DEFAU
   const recommendedText = cut(input.recommended, caps.label)
   const recommended = options.some(o => o.label === recommendedText) ? recommendedText : undefined
 
-  const rawSources = Array.isArray(input.sources) ? input.sources : []
+  // Past the cap the used sources stay on the card and the maybe ones go to the extras: sort is stable.
+  const isUsed = (raw: unknown): boolean => ((raw ?? {}) as Record<string, unknown>).use === 'used'
+  const rawSources = (Array.isArray(input.sources) ? [...input.sources] : []).sort((a, b) => Number(isUsed(b)) - Number(isUsed(a)))
   const sources: GameSource[] = []
   const extraSources: GameSource[] = []
   for (const raw of rawSources) {
