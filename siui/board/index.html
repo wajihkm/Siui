@@ -984,6 +984,20 @@
     ? `Save point (${KINDS.checkpoint.game}): ${mdPlain(ev.title)} — commit ${(ev.commit || '').slice(0, 7)}${ev.branch ? ' on ' + ev.branch : ''}, saved ${when(ev.at)}. Return here from the stage's Step panel.`
     : `${KINDS[ev.kind].name} (${KINDS[ev.kind].game}), ${SIZE_WORDS[sizeOf(ev)]} work: ${mdPlain(ev.title)}${ev.text ? ' — ' + mdPlain(ev.text) : ''}${ev.to ? ` → ${w('world')} ${ev.to.world}${ev.to.level ? ' ' + ev.to.level : ''}` : ''} (${ev.status === 'done' ? KINDS[ev.kind].done + ' ' + when(ev.doneAt || ev.at) : 'open since ' + when(ev.at)})`;
 
+  /** The castle's button: when every other stage of an open world is done, the review that applies the world can be asked
+   *  from here, after a Stop on the boss card or when the chat never reached it. */
+  function applyButton(run, view) {
+    if (!run || run.isPack || isSide(run) || run.finishedAt != null || !view || !view.isBoss) return '';
+    if (!overview(run).filter(v => !v.isBoss && !v.road).every(v => v.state === 'done')) return '';
+    return `<button class="small primary" data-apply="${esc(run.world)}" data-level="${esc(view.level)}" title="Ask the chat for the ${esc(w('boss'))} ${esc(w('card'))}: the review of every decision, then Apply">Review and apply</button>`;
+  }
+  function wireApply(el) {
+    el.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click', async () => {
+      const world = Number(b.dataset.apply), level = b.dataset.level;
+      if (await post('/prompt', { text: `Present the boss card of world ${world} (level ${level}) now: the review of every decision of the world, one line per level, with the options Apply, Change one and Stop, with no text before it. On Apply, apply the world as its pack says and call the done tool.` })) toast('Asked the chat for the review');
+    }));
+  }
+
   function marksBlock(events, world, level) {
     let html = '<div class="marks">';
     events.forEach(ev => {
@@ -1339,7 +1353,8 @@
       ? `<span class="roadswitch" title="The road on disk; click the other to switch">${['a', 'b'].map(r => `<button class="small${fk.onDisk === r ? ' primary' : ''}" data-road="${r}" data-stage="${esc(baseLevel)}" ${fk.onDisk === r ? 'disabled' : ''}>road ${r}</button>`).join('')}</span>`
       : fk ? `<span class="tag" title="Merged: road ${esc(fk.merged)} kept${fk.tag ? '; the other tagged ' + esc(fk.tag) : ''}">merged ${esc(fk.merged)}</span>`
       : (run.finishedAt == null && !openForkOf(run) && !view.isBoss ? `<button class="small" data-fork="${esc(baseLevel)}" title="Split this stage into roads a and b: a checkpoint, two git branches, the remaining cards asked on each">⑂ Fork</button>` : '');
-    el.innerHTML = `<h2>${esc(Wc('stage'))} <span class="ttl">${esc(view.level)} ${esc(view.title)}</span> ${statusPill(stageStatus(view, run))} ${isWorkingStage ? '<span class="tag working" title="The chat works on this stage now">working</span> ' : ''}${forkTools} <span class="sub">${counts.cards} ${esc(ws('card'))} answered${counts.ahead ? `, ${counts.ahead} ahead` : ''}${counts.open ? ` · ${counts.open} open` : ''}${counts.done ? ` · ${counts.done} done` : ''}</span></h2>${svg}`;
+    el.innerHTML = `<h2>${esc(Wc('stage'))} <span class="ttl">${esc(view.level)} ${esc(view.title)}</span> ${statusPill(stageStatus(view, run))} ${isWorkingStage ? '<span class="tag working" title="The chat works on this stage now">working</span> ' : ''}${forkTools}${applyButton(run, view)} <span class="sub">${counts.cards} ${esc(ws('card'))} answered${counts.ahead ? `, ${counts.ahead} ahead` : ''}${counts.open ? ` · ${counts.open} open` : ''}${counts.done ? ` · ${counts.done} done` : ''}</span></h2>${svg}`;
+    wireApply(el);
     el.querySelectorAll('[data-fork]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Fork the stage ${b.dataset.fork} into roads a and b? A checkpoint is taken first; road a goes on disk.`, { ok: 'Fork' }))) return;
       if (await post('/prompt', { text: `Fork the stage ${b.dataset.fork} now: call the fork tool with action "fork" and level "${b.dataset.fork}", then present the next card on road a, with no text before it.` })) toast('Asked the chat to fork');
@@ -1877,6 +1892,7 @@
       (turns.length ? `<span><b>${turns.length}</b> chat turns</span>` : '') +
       (first ? `<span>${esc(when(first.toISOString()))}${last && last.getTime() !== first.getTime() ? ` → ${esc(when(last.toISOString()))}` : ''}</span>` : '') +
       `</div>` +
+      (applyButton(run, view) ? `<div class="nav">${applyButton(run, view)}<span class="g" style="margin-left:10px">the review ${esc(w('card'))} that applies the ${esc(w('world'))}; Stop on it leaves the ${esc(w('world'))} open</span></div>` : '') +
       `<div class="nav">${prev ? `<button class="small" data-go="${esc(prev.level)}">← ${esc(prev.level)}${prev.title ? ' ' + esc(prev.title) : ''}</button>` : ''}<span class="spacer"></span>${next ? `<button class="small" data-go="${esc(next.level)}">${esc(next.level)}${next.title ? ' ' + esc(next.title) : ''} →</button>` : ''}</div>` +
       `</div>`;
     if (all.length) {
@@ -1903,6 +1919,7 @@
       if (d.open) buildGraph(d);
     });
     el.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => { selectLevel(run, b.dataset.go); render(true); }));
+    wireApply(el);
     el.querySelectorAll('[data-jump]').forEach(c => c.addEventListener('click', () => revealDecision(c.dataset.jump)));
     const expand = b => el.querySelectorAll('details.decision').forEach(d => { d.open = b; });
     el.querySelectorAll('[data-expand]').forEach(b => b.addEventListener('click', () => expand(true)));
