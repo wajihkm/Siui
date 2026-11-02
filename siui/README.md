@@ -177,9 +177,10 @@ plugin's folder, or a clone):
   "args": ["-I", "/path/to/siui/siui/mcp/server.py", "--root", "${workspaceFolder}"] } } }
 ```
 
-and copy `skills/decision-cards/` into the project's `.claude/skills/`. The three prompt
-files in `prompts/` give the chat `/siui-on`, `/siui-board` and `/siui-status` once copied
-into `.github/prompts/`. What differs from Claude Code: the server cannot see which files
+and copy `skills/` into the project's `.claude/skills/`: the decision-cards skill and
+three command skills, `siui-on`, `siui-board` and `siui-status`, which the chat runs as
+`/siui-on scaffold`, `/siui-board` and `/siui-status` and never loads by itself. What
+differs from Claude Code: the server cannot see which files
 Copilot read, so an input marked used draws solid on the model's word; forks and returns
 to a save point are the board's buttons; the chat log is not written. One record and one
 board serve both assistants: a world begun in one goes on in the other.

@@ -71,7 +71,8 @@ every command, the board, the universes, the record and the configuration.
 `skills/decision-cards/SKILL.md` is the same protocol for an assistant that has no card
 tool: the rules, a text card format, the record and the pack format. Copy the folder into
 a project's `.claude/skills/` or into `~/.claude/skills/`; the packs it runs are the
-plugin's `scaffold` or your own.
+plugin's `scaffold` or your own. Beside it, `siui-on`, `siui-board` and `siui-status` are
+the commands for GitHub Copilot: skills it runs only when typed.
 
 | Part | Where |
 |---|---|
