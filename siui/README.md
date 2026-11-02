@@ -169,18 +169,21 @@ copilot plugin marketplace add wajihkm/siui       the Copilot CLI: the marketpla
 copilot plugin install siui-copilot@siui          then the plugin: the server and the skill
 ```
 
-In VS Code without the CLI, name the server in the project's `.vscode/mcp.json` (the
-plugin's folder, or a clone):
+In VS Code, one command sets a project up for both agents its chat offers, Copilot's own
+and the Claude sessions it runs:
 
-```json
-{ "servers": { "siui": { "type": "stdio", "command": "python3",
-  "args": ["-I", "/path/to/siui/siui/mcp/server.py", "--root", "${workspaceFolder}"] } } }
+```
+python3 -I /path/to/siui/siui/mcp/server.py --init     in the project; then reload the window
 ```
 
-and copy `skills/` into the project's `.claude/skills/`: the decision-cards skill and
-three command skills, `siui-on`, `siui-board` and `siui-status`, which the chat runs as
-`/siui-on scaffold`, `/siui-board` and `/siui-status` and never loads by itself. What
-differs from Claude Code: the server cannot see which files
+It writes the server into `.vscode/mcp.json` (read by Copilot's agent) and into
+`.mcp.json` (discovered for a Claude session; left out where the Siui Claude Code plugin
+is on, since its tools carry the same names; `--for claude` or `--for copilot` picks
+one), keeping what the files held, and copies `skills/` into the project's
+`.claude/skills/`: the decision-cards skill and three command skills, `siui-on`,
+`siui-board` and `siui-status`, which either chat runs as `/siui-on scaffold`,
+`/siui-board` and `/siui-status` and never loads by itself. What differs from Claude
+Code: the server cannot see which files
 Copilot read, so an input marked used draws solid on the model's word; forks and returns
 to a save point are the board's buttons; the chat log is not written. One record and one
 board serve both assistants: a world begun in one goes on in the other.

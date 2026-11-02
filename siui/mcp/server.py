@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Siui for GitHub Copilot: an MCP server over stdio with the card tools.
+"""Siui for GitHub Copilot, and for the Claude sessions VS Code runs: an MCP server
+over stdio with the card tools.
 
 Copilot (VS Code agent mode, the Copilot CLI, the cloud agent) cannot draw in its
 own dialog, so it gets Siui through the Model Context Protocol: this server
 offers the tools the Claude Code plugin registers through its hooks, with the
 same record (.claude/decisions.json), the same run folder and the same board.
+A Claude session that VS Code's agent host runs has no plugin either; it finds
+this server through the project's .mcp.json, which --init writes.
 
     card    one decision: waits for the answer on the board while its page is open;
             else asks through an elicitation form when the client has one; else
@@ -1288,10 +1291,94 @@ class Siui:
         return {"status": "\n".join(lines)}, ["Go on from the next card named, with no text before it."]
 
 
+# ---------------------------------------------------------------- the setup of a project
+
+SKILLS_DIR = os.path.join(os.path.dirname(PLUGIN), "skills")
+SKILL_NAMES = ("decision-cards", "siui-on", "siui-board", "siui-status")
+
+
+def claude_plugin_installed(folder):
+    """Whether the Siui Claude Code plugin is on for `folder`: installed for the user, or for that project. Its tools
+    carry the same names as the server's, so a Claude session must not get both."""
+    data = read_json(os.path.join(os.environ.get("HOME", ""), ".claude", "plugins", "installed_plugins.json"), None)
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return False
+    for key, installs in plugins.items():
+        if key != "siui" and not key.startswith("siui@"):
+            continue
+        for one in installs if isinstance(installs, list) else []:
+            if not isinstance(one, dict):
+                continue
+            if one.get("scope") == "user":
+                return True
+            if os.path.abspath(str(one.get("projectPath") or "")) == folder:
+                return True
+    return False
+
+
+def merge_json(path, key, name, entry):
+    """Sets `key.name` in the JSON file at `path`, keeping everything else; a file that is not JSON is left alone."""
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return f"left alone: {path} is not plain JSON; add the server by hand"
+        if not isinstance(data, dict):
+            return f"left alone: {path} is not an object"
+    section = data.get(key)
+    if not isinstance(section, dict):
+        section = {}
+        data[key] = section
+    section[name] = entry
+    write_json(path, data)
+    return f"written: {path}"
+
+
+def init_project(folder, target):
+    """Sets a project up for Siui in VS Code: Copilot's agent (.vscode/mcp.json), the Claude sessions VS Code runs
+    (.mcp.json), and the skills both read (.claude/skills)."""
+    folder = os.path.abspath(folder)
+    server = os.path.abspath(__file__)
+    lines = []
+    if target in ("both", "copilot"):
+        entry = {"type": "stdio", "command": "python3", "args": ["-I", server, "--root", "${workspaceFolder}"]}
+        lines.append(merge_json(os.path.join(folder, ".vscode", "mcp.json"), "servers", "siui", entry))
+    if target in ("both", "claude"):
+        if claude_plugin_installed(folder) and target == "both":
+            lines.append("skipped: .mcp.json, since the Siui Claude Code plugin is installed and brings the same tools; "
+                         "--for claude writes it anyway")
+        else:
+            entry = {"type": "stdio", "command": "python3", "args": ["-I", server, "--root", folder]}
+            lines.append(merge_json(os.path.join(folder, ".mcp.json"), "mcpServers", "siui", entry))
+    if os.path.isdir(SKILLS_DIR):
+        import shutil
+        for name in SKILL_NAMES:
+            source = os.path.join(SKILLS_DIR, name)
+            if not os.path.isdir(source):
+                continue
+            dest = os.path.join(folder, ".claude", "skills", name)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copytree(source, dest, dirs_exist_ok=True)
+            lines.append(f"copied: .claude/skills/{name}")
+    else:
+        lines.append(f"no skills folder beside the plugin ({SKILLS_DIR}); copy skills/ from the siui repository into .claude/skills")
+    lines.append("Reload the VS Code window; then /siui-board in Copilot's agent or in a Claude session.")
+    return "\n".join(lines)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Siui's MCP server for GitHub Copilot, over stdio")
+    parser = argparse.ArgumentParser(description="Siui's MCP server for GitHub Copilot and for the Claude sessions VS Code runs, over stdio")
     parser.add_argument("--root", default=os.environ.get("SIUI_ROOT") or os.getcwd(), help="the project (default: the working directory)")
+    parser.add_argument("--init", nargs="?", const=".", metavar="FOLDER",
+                        help="set a project up instead of serving: .vscode/mcp.json for Copilot's agent, .mcp.json for Claude sessions, the skills into .claude/skills")
+    parser.add_argument("--for", dest="target", choices=("both", "copilot", "claude"), default="both", help="with --init: which agent (default both)")
     args = parser.parse_args()
+    if args.init is not None:
+        print(init_project(args.init, args.target))
+        return
     root = os.path.abspath(args.root)
     siui = Siui(root, Rpc)
     siui.rpc.serve()
