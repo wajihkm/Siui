@@ -17,7 +17,8 @@ and applied. Nothing is generated before the boss.
    With Siui's MCP server (GitHub Copilot) the card mechanism is its `card` tool; `note`,
    `event` and `done` record the rest, `status` resumes a run, `board` opens the board;
    when `card` returns a text card, show it as your whole message and record the reply
-   with `answer`.
+   with `answer`; when nothing is left to present and the board is open, `listen` waits
+   for the user's next move there.
 2. Write nothing between cards: no preamble, recap, headings or bullet lists. At most one
    short sentence per turn, only to report an error.
 3. Caps: title ≤ 8 words, short ≤ 20 words, each option effect ≤ 14 words, explain ≤ 80

@@ -157,7 +157,7 @@ open that view, so the plugin opens the system browser.
 
 The same cards, record and board for GitHub Copilot, through an MCP server
 (`mcp/server.py`, standard library) that offers the tools the hooks give Claude: `card`,
-`note`, `event`, `done`, with `answer`, `board` and `status` beside them. Copilot has no
+`note`, `event`, `done`, with `answer`, `board`, `status` and `listen` beside them. Copilot has no
 dialog a plugin can draw in, so a card is answered on the board while its page is open;
 with the page closed, through an elicitation form in the chat when the client draws one
 (VS Code agent mode); else as a text card in the chat, answered in your next message and
@@ -189,16 +189,18 @@ to a save point are the board's buttons; the chat log is not written. One record
 board serve both assistants: a world begun in one goes on in the other.
 
 How the board reaches the chat, which has no door for a message from outside: a card waits
-on the board in rounds of `boardWait` seconds (50 by default, in the configuration), each
+on the board in rounds of `boardWait` seconds (25 by default, in the configuration), each
 round one call of `card` that hands back "awaiting" and is called again, so a client's own
 limit on a tool call never loses the answer; an answer given between rounds comes back at
 once. What you type on the board (its send box, Note & Notify, Start, New world, Present
 again) ends the round and reaches the chat as your words, the card presented again after.
-While no card waits, the server puts it into VS Code's chat itself through the desktop
-`code chat` command (on WSL, Windows' VS Code through PowerShell), as your words in agent
-mode in the last active window; where that command is missing it rides on the chat's next
-call instead, and the board's header says so, so a word typed in the chat pulls it.
-`SIUI_NO_PUSH=1` in the server's environment turns the push off.
+When nothing is left to present (the world is done, a card was dismissed) and the page is
+open, the chat calls `listen`, which waits the same way for your next move on the board,
+so the session stays one; when the page is closed it ends the turn and waits for you in
+the chat. A message sent while the chat is idle rides on its next call, and the board's
+header says so, so a word typed in the chat pulls it. `SIUI_PUSH=1` in the server's
+environment makes it push such a message into VS Code's chat through the desktop
+`code chat` command instead, which opens a new chat session each time.
 
 ## Packs
 
@@ -327,8 +329,8 @@ is for the board and need not be committed.
   project's skill folder and before the plugin's bundled one.
 - `boardPort` is the board server's first port (1024 to 65535).
 - `boardWait`, for GitHub Copilot and the Claude sessions VS Code runs: how many seconds
-  one call of the MCP server's `card` tool waits on the board before being called again
-  (50 by default; 1 to 3600).
+  one call of the MCP server's `card` or `listen` tool waits on the board before being
+  called again (25 by default, under the clients' own limits on a tool call; 1 to 3600).
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
 - `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
   Hide button on a planned world writes it, its hidden button clears it.

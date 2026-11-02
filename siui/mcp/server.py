@@ -45,7 +45,7 @@ RUN_FOLDER = "siui"
 DEFAULT_PORT = 5131
 ALIVE_SECONDS = 12
 WAIT_SECONDS = 3600
-ROUND_SECONDS = 50  # one `card` call waits this long on the board, then hands back "awaiting" and is called again
+ROUND_SECONDS = 25  # one `card` or `listen` call waits this long on the board, then hands back "awaiting" and is called again
 DISMISSED = "\0dismissed"
 CAPS = {"levelTitle": 40, "title": 60, "short": 120, "explain": 480, "label": 30, "effect": 80, "remaining": 80,
         "note": 200, "name": 30, "why": 60, "options": 4, "sources": 6}
@@ -750,7 +750,7 @@ def chat_pusher():
     if _pusher is not None:
         return _pusher or None
     _pusher = ""
-    if os.environ.get("SIUI_NO_PUSH"):
+    if not os.environ.get("SIUI_PUSH") or os.environ.get("SIUI_NO_PUSH"):
         return None
     try:
         with open("/proc/version", encoding="utf-8") as handle:
@@ -1016,6 +1016,11 @@ TOOLS = [
                                     "summary line per level for you to append where the pack says (nowhere when it says nothing). With no boss card answered "
                                     "on the last level the tool asks you to check with the user first; call it again with confirm: true when they agree.",
      "inputSchema": {"type": "object", "properties": {"world": {"type": "integer", "minimum": 1}, "confirm": {"type": "boolean"}}}},
+    {"name": "listen", "description": "Wait for the user's next move on the board while its page is open: a message from its send "
+                                      "box, a Start, a New world, a note. Call it when nothing is left to present (after `done`, or an info card's "
+                                      "Stop) and the board is open; it returns what the user wrote, to act on as their message, or \"awaiting\" "
+                                      "(call it again), or \"closed\" when the page is gone (then end the turn and wait in the chat).",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "board", "description": "Start the Siui board's server for this project and open its page in the browser: the roadmap of worlds, the maps, every "
                                      "step with its decisions and files; cards are answered there while the page is open. Returns the page's address.",
      "inputSchema": {"type": "object", "properties": {"open": {"type": "boolean", "description": "false: the address only, no browser"}}}},
@@ -1047,7 +1052,8 @@ class Siui:
                     "serverInfo": {"name": "siui", "version": "1.0.0"},
                     "instructions": "GAME MODE: the user has eye strain and wants decisions, not prose. Ask everything through the "
                                     "`card` tool, one decision per call, and write nothing between cards. The decision-cards skill "
-                                    "holds the rules; `status` resumes a run; `board` opens the board."}
+                                    "holds the rules; `status` resumes a run; `board` opens the board; when nothing is left to "
+                                    "present and the board's page is open, `listen` waits for the user's next move there."}
         if method in ("notifications/initialized", "notifications/cancelled", "notifications/progress"):
             return None
         if method == "ping":
@@ -1060,7 +1066,7 @@ class Siui:
 
     def call(self, name, args, req_id=None):
         handler = {"card": self.tool_card, "answer": self.tool_answer, "note": self.tool_note, "event": self.tool_event,
-                   "done": self.tool_done, "board": self.tool_board, "status": self.tool_status}.get(name)
+                   "done": self.tool_done, "board": self.tool_board, "status": self.tool_status, "listen": self.tool_listen}.get(name)
         if handler is None:
             return {"content": [{"type": "text", "text": f"unknown tool {name}"}], "isError": True}
         if not isinstance(args, dict):
@@ -1270,7 +1276,8 @@ class Siui:
                                      level_title or card.get("levelTitle"), None if level_title else card.get("count"))
                         write_record(self.root, self.config["record"], record)
         return ({"id": card["id"], "level": card["level"], "dismissed": True},
-                ["The user dismissed the card; it is kept as skipped and comes again later. End the turn with one short line and wait."])
+                ["The user dismissed the card; it is kept as skipped and comes again later. Say so in one short line; then, while",
+                 "the board's page is open, call listen and wait for their next move there."])
 
     @staticmethod
     def opens_world(record, card):
@@ -1442,7 +1449,33 @@ class Siui:
                 write_record(self.root, self.config["record"], record)
         write_status(self.paths, "idle")
         return ({"lines": summary_lines(run, today(), self.config["record"]), "file": self.config["record"]},
-                ["Append the lines where the pack says, or nowhere when it says nothing. Write no other file."])
+                ["Append the lines where the pack says, or nowhere when it says nothing. Write no other file.",
+                 "Then, while the board's page is open, call listen and wait for the user's next move there."])
+
+    def tool_listen(self, args):
+        """Waits for the page's next message in one round; the chat stays in its session, the board its door."""
+        if not is_board_live(self.paths):
+            write_status(self.paths, "idle")
+            return {"board": "closed"}, ["The board's page is not open. End the turn with one short line and wait for the user in the chat."]
+        write_status(self.paths, "idle", "listening to the board")
+        deadline = time.time() + self.config["boardWait"]
+        req_id = getattr(self.local, "req_id", None)
+        last_beat = 0
+        while time.time() < deadline:
+            if req_id is not None and self.rpc.is_cancelled(req_id):
+                return {"awaiting": "board", "cancelled": True}, []
+            if time.time() - last_beat > 20:
+                heartbeat(self.paths)
+                last_beat = time.time()
+            sent = drain_prompts(self.paths)
+            if sent:
+                write_status(self.paths, "working", "the board's message")
+                return ({"fromBoard": sent}, ["From the board, the user wrote: " + " | ".join(sent) + ". Act on it as their message."])
+            if not is_board_live(self.paths):
+                write_status(self.paths, "idle")
+                return {"board": "closed"}, ["The board's page went away. End the turn with one short line and wait for the user in the chat."]
+            time.sleep(0.2)
+        return {"awaiting": "board"}, ["Nothing yet. Call listen again now, with no text."]
 
     def tool_board(self, args):
         port = ensure_server(self.root, self.paths, self.config["record"], self.config["boardPort"], self.config["chatLog"])
