@@ -193,9 +193,12 @@ on the board in rounds of `boardWait` seconds (50 by default, in the configurati
 round one call of `card` that hands back "awaiting" and is called again, so a client's own
 limit on a tool call never loses the answer; an answer given between rounds comes back at
 once. What you type on the board (its send box, Note & Notify, Start, New world, Present
-again) ends the round and reaches the chat as your words, the card presented again after;
-while no card waits, it rides on the chat's next call, and the board's header says so, so
-a word typed in the chat is enough to pull it.
+again) ends the round and reaches the chat as your words, the card presented again after.
+While no card waits, the server puts it into VS Code's chat itself through the desktop
+`code chat` command (on WSL, Windows' VS Code through PowerShell), as your words in agent
+mode in the last active window; where that command is missing it rides on the chat's next
+call instead, and the board's header says so, so a word typed in the chat pulls it.
+`SIUI_NO_PUSH=1` in the server's environment turns the push off.
 
 ## Packs
 

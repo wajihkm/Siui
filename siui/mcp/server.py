@@ -738,6 +738,62 @@ def prompts_waiting(paths):
         return False
 
 
+# --- a door into VS Code's chat: its desktop CLI's `code chat`, which the remote CLI inside WSL lacks
+
+_pusher = None
+
+
+def chat_pusher():
+    """How a message is put into VS Code's chat from here, found once: on WSL, Windows' VS Code through PowerShell;
+    elsewhere a `code` on PATH whose `chat` command answers; None when there is none."""
+    global _pusher
+    if _pusher is not None:
+        return _pusher or None
+    _pusher = ""
+    if os.environ.get("SIUI_NO_PUSH"):
+        return None
+    try:
+        with open("/proc/version", encoding="utf-8") as handle:
+            on_wsl = "microsoft" in handle.read().lower()
+    except OSError:
+        on_wsl = False
+    powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    if on_wsl and os.path.exists(powershell):
+        _pusher = "wsl"
+    else:
+        import shutil
+        code = shutil.which("code")
+        if code:
+            try:
+                ran = subprocess.run([code, "chat", "--help"], capture_output=True, text=True, timeout=20)
+                if ran.returncode == 0 and "chat" in ran.stdout:
+                    _pusher = "code"
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    return _pusher or None
+
+
+def push_to_chat(texts):
+    """Puts the texts into the last active VS Code window's chat as the user's words, in agent mode; whether it went."""
+    how = chat_pusher()
+    if not how:
+        return False
+    text = "\n\n".join(texts)
+    try:
+        if how == "wsl":
+            import base64
+            encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+            script = (f"[Console]::InputEncoding=[Text.Encoding]::UTF8; "
+                      f"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')) | code chat -r -m agent -")
+            ran = subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-NoProfile", "-NonInteractive",
+                                  "-Command", script], capture_output=True, text=True, timeout=30, cwd="/mnt/c")
+        else:
+            ran = subprocess.run(["code", "chat", "-r", "-m", "agent", "-"], input=text, capture_output=True, text=True, timeout=30)
+        return ran.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def served_root(port):
     try:
         state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/state", timeout=2))
@@ -1037,15 +1093,22 @@ class Siui:
             while True:
                 if os.path.isdir(self.paths["run"]):
                     heartbeat(self.paths)
-                    # A message from the page while no call is in flight: the chat hears it at its next turn, and
-                    # the board says so, so the user knows to type something in the chat.
+                    # A message from the page while no call is in flight: pushed into VS Code's chat as the user's
+                    # words when its CLI is there; else it waits for the chat's next turn, and the board says so.
                     if self.in_flight == 0 and prompts_waiting(self.paths):
-                        if not told:
+                        if chat_pusher():
+                            sent = drain_prompts(self.paths)
+                            if sent and not push_to_chat(sent):
+                                with open(self.paths["prompts"], "a", encoding="utf-8") as handle:
+                                    for one in sent:
+                                        handle.write(json.dumps({"text": one, "at": time.time()}) + "\n")
+                                told = False
+                        if prompts_waiting(self.paths) and not told:
                             write_status(self.paths, "idle", "a message from the board waits for your next words in the chat")
                             told = True
                     else:
                         told = False
-                time.sleep(5)
+                time.sleep(2)
         threading.Thread(target=beat, daemon=True).start()
 
     # --- the card
