@@ -153,6 +153,37 @@ the command palette, "Simple Browser: Show", then the address; or a key bound to
 `simpleBrowser.show` with the address as its argument. Nothing on the command line can
 open that view, so the plugin opens the system browser.
 
+## GitHub Copilot
+
+The same cards, record and board for GitHub Copilot, through an MCP server
+(`mcp/server.py`, standard library) that offers the tools the hooks give Claude: `card`,
+`note`, `event`, `done`, with `answer`, `board` and `status` beside them. Copilot has no
+dialog a plugin can draw in, so a card is answered on the board while its page is open;
+with the page closed, through an elicitation form in the chat when the client draws one
+(VS Code agent mode); else as a text card in the chat, answered in your next message and
+recorded with `answer`. The rules reach Copilot through the decision-cards skill, which
+it reads from `.claude/skills` or the plugin.
+
+```
+copilot plugin marketplace add wajihkm/siui       the Copilot CLI: the marketplace,
+copilot plugin install siui-copilot@siui          then the plugin: the server and the skill
+```
+
+In VS Code without the CLI, name the server in the project's `.vscode/mcp.json` (the
+plugin's folder, or a clone):
+
+```json
+{ "servers": { "siui": { "type": "stdio", "command": "python3",
+  "args": ["-I", "/path/to/siui/siui/mcp/server.py", "--root", "${workspaceFolder}"] } } }
+```
+
+and copy `skills/decision-cards/` into the project's `.claude/skills/`. The three prompt
+files in `prompts/` give the chat `/siui-on`, `/siui-board` and `/siui-status` once copied
+into `.github/prompts/`. What differs from Claude Code: the server cannot see which files
+Copilot read, so an input marked used draws solid on the model's word; forks and returns
+to a save point are the board's buttons; the chat log is not written. One record and one
+board serve both assistants: a world begun in one goes on in the other.
+
 ## Packs
 
 A pack is one markdown file: a world, its fixed facts, its levels, and for each level its

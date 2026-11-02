@@ -5,7 +5,9 @@ Siui (Super intelligent Ui) is its plugin: the assistant's questions drawn as de
 cards, one at a time, in levels and worlds like a game, with a board that maps the run.
 decision-cards is the skill, kept outside the plugin in `skills/decision-cards/`: the
 rules and the record, which also work with no plugin at all. The plugin ships one pack,
-`scaffold`, for a new project; a project writes its own.
+`scaffold`, for a new project; a project writes its own. GitHub Copilot gets the same
+cards, record and board through the plugin's MCP server, installed as `siui-copilot` from
+the same marketplace.
 
 ## Quick start
 
@@ -13,6 +15,8 @@ rules and the record, which also work with no plugin at all. The plugin ships on
 /plugin install siui --marketplace wajihkm/siui    one step: the marketplace and the plugin
 /plugin marketplace add wajihkm/siui               or in two: the marketplace, from GitHub,
 /plugin install siui@siui                          then the plugin
+copilot plugin marketplace add wajihkm/siui        GitHub Copilot CLI: the marketplace,
+copilot plugin install siui-copilot@siui           then the plugin: the server and the skill
 ```
 
 From a clone instead: `git clone https://github.com/wajihkm/siui.git`, then

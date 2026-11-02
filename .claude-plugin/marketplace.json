@@ -1,6 +1,34 @@
 {
   "name": "siui",
-  "owner": { "name": "Wajih Kammoun" },
-  "description": "Claude Code mods that are easier on the eyes: decisions as cards, one at a time",
-  "plugins": [{ "name": "siui", "source": "./siui" }]
+  "owner": {
+    "name": "Wajih Kammoun"
+  },
+  "description": "Mods that are easier on the eyes: decisions as cards, one at a time, for Claude Code and GitHub Copilot",
+  "plugins": [
+    {
+      "name": "siui",
+      "source": "./siui",
+      "description": "For Claude Code: the card in the question dialog, the record, the board"
+    },
+    {
+      "name": "siui-copilot",
+      "source": "./",
+      "strict": false,
+      "version": "1.0.0",
+      "description": "For GitHub Copilot: the same cards, record and board through an MCP server, with the decision-cards skill",
+      "skills": [
+        "./skills/"
+      ],
+      "mcpServers": {
+        "siui": {
+          "type": "stdio",
+          "command": "python3",
+          "args": [
+            "-I",
+            "${CLAUDE_PLUGIN_ROOT}/siui/mcp/server.py"
+          ]
+        }
+      }
+    }
+  ]
 }

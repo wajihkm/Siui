@@ -14,6 +14,10 @@ and applied. Nothing is generated before the boss.
 
 1. Ask everything through your card mechanism if you have one, else print the text card
    below. One decision per card. Never a list of questions, never options in prose.
+   With Siui's MCP server (GitHub Copilot) the card mechanism is its `card` tool; `note`,
+   `event` and `done` record the rest, `status` resumes a run, `board` opens the board;
+   when `card` returns a text card, show it as your whole message and record the reply
+   with `answer`.
 2. Write nothing between cards: no preamble, recap, headings or bullet lists. At most one
    short sentence per turn, only to report an error.
 3. Caps: title ≤ 8 words, short ≤ 20 words, each option effect ≤ 14 words, explain ≤ 80

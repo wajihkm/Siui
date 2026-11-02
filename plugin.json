@@ -1,0 +1,33 @@
+{
+  "name": "siui-copilot",
+  "version": "1.0.0",
+  "description": "Siui for GitHub Copilot: decisions as cards, one at a time, with a record in the project and a board; an MCP server and the decision-cards skill",
+  "author": {
+    "name": "Wajih Kammoun",
+    "url": "https://github.com/wajihkm"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/wajihkm/siui",
+  "homepage": "https://github.com/wajihkm/siui#readme",
+  "keywords": [
+    "decision cards",
+    "game mode",
+    "mcp",
+    "copilot",
+    "board",
+    "eye strain"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "mcpServers": {
+    "siui": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "-I",
+        "${CLAUDE_PLUGIN_ROOT}/siui/mcp/server.py"
+      ]
+    }
+  }
+}
