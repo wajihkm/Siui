@@ -2270,9 +2270,15 @@
     $('card').scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
+  /** The tab's title: the project after the name, a dot in front while a card waits, so a tab in the background tells. */
+  function setTabTitle() {
+    const waiting = document.body.classList.contains('card-waiting');
+    document.title = `${waiting ? '● ' : ''}Siui | ${(state && state.project) || 'board'}`;
+  }
   function setWaiting(isWaiting) {
     $('card').classList.toggle('waiting', isWaiting);
     document.body.classList.toggle('card-waiting', isWaiting);
+    setTabTitle();
     $('nowtoggle').querySelector('.word').textContent = isWaiting ? say('turn', 'Your turn') : '';
     document.title = isWaiting ? '● Card waiting · Siui' : 'Siui';
     renderLive();
@@ -2435,6 +2441,7 @@
     }
     fontK = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--base')) || 17) / 17;
     $('title').textContent = `Siui · ${state.project}`;
+    setTabTitle();
     const runs = (state.record && state.record.runs) || [];
     $('meta').textContent = run ? `${isSide(run) ? 'side quests' : `${w('world')} ${run.world} · ${packName(run)}`}${runs.length > 1 ? ` · ${runs.filter(r => !isSide(r)).length} ${ws('world')}` : ''}` : `no ${w('world')} yet`;
     // Each section is drawn again only when what it is drawn from changed; `force` only lifts the typing guards.
