@@ -778,17 +778,21 @@ def push_to_chat(texts):
     how = chat_pusher()
     if not how:
         return False
-    text = "\n\n".join(texts)
+    # The prompt goes as the argument: on stdin it would be attached as a file, not sent. One line, no double quotes,
+    # since the Windows side quotes arguments naively.
+    text = " ".join(" / ".join(texts).split()).replace('"', "'")
+    if not text:
+        return True
     try:
         if how == "wsl":
             import base64
             encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-            script = (f"[Console]::InputEncoding=[Text.Encoding]::UTF8; "
-                      f"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')) | code chat -r -m agent -")
+            script = (f"$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')); "
+                      "& code chat -r $t")
             ran = subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-NoProfile", "-NonInteractive",
                                   "-Command", script], capture_output=True, text=True, timeout=30, cwd="/mnt/c")
         else:
-            ran = subprocess.run(["code", "chat", "-r", "-m", "agent", "-"], input=text, capture_output=True, text=True, timeout=30)
+            ran = subprocess.run(["code", "chat", "-r", text], capture_output=True, text=True, timeout=30)
         return ran.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
