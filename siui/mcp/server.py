@@ -45,6 +45,7 @@ RUN_FOLDER = "siui"
 DEFAULT_PORT = 5131
 ALIVE_SECONDS = 12
 WAIT_SECONDS = 3600
+ROUND_SECONDS = 50  # one `card` call waits this long on the board, then hands back "awaiting" and is called again
 DISMISSED = "\0dismissed"
 CAPS = {"levelTitle": 40, "title": 60, "short": 120, "explain": 480, "label": 30, "effect": 80, "remaining": 80,
         "note": 200, "name": 30, "why": 60, "options": 4, "sources": 6}
@@ -135,7 +136,8 @@ def touch(path):
 # ---------------------------------------------------------------- the configuration
 
 def read_config(root):
-    made = {"record": RECORD_PATH, "caps": dict(CAPS), "packs": [], "boardPort": DEFAULT_PORT, "chatLog": CHAT_PATH}
+    made = {"record": RECORD_PATH, "caps": dict(CAPS), "packs": [], "boardPort": DEFAULT_PORT, "chatLog": CHAT_PATH,
+            "boardWait": ROUND_SECONDS}
     given = read_json(os.path.join(root, CONFIG_PATH), {})
     if not isinstance(given, dict):
         return made
@@ -156,6 +158,8 @@ def read_config(root):
     packs = given.get("packs")
     if isinstance(packs, list):
         made["packs"] = [one.strip() for one in packs if isinstance(one, str) and one.strip() and ".." not in one][:8]
+    wait = given.get("boardWait")
+    made["boardWait"] = wait if isinstance(wait, int) and not isinstance(wait, bool) and 1 <= wait <= 3600 else ROUND_SECONDS
     return made
 
 
@@ -649,7 +653,8 @@ def board_paths(root):
     home = os.environ.get("HOME", "").rstrip("/")
     run = os.path.join(home, ".cache", RUN_FOLDER, slug) if home else os.path.join("/tmp", RUN_FOLDER, slug)
     names = {"card": "card.json", "alive": "alive", "heartbeat": "heartbeat", "stop": "stop", "server": "server.json",
-             "status": "status.json", "auto": "auto.json", "chat_first": "chat-first.json", "inbox": "inbox-answer.json"}
+             "status": "status.json", "auto": "auto.json", "chat_first": "chat-first.json", "inbox": "inbox-answer.json",
+             "prompts": "inbox-prompts.jsonl"}
     return {"run": run, **{key: os.path.join(run, name) for key, name in names.items()}}
 
 
@@ -693,6 +698,44 @@ def is_board_live(paths):
 
 def is_chat_first(paths):
     return bool((read_json(paths["chat_first"], {}) or {}).get("on"))
+
+
+def drain_prompts(paths):
+    """What the page sent to the chat (its send box, Note & Notify, Start, New world, Present again): the lines of the
+    prompts inbox, which is moved aside first so the page's next line lands in a fresh file."""
+    path = paths["prompts"]
+    if not os.path.exists(path):
+        return []
+    aside = f"{path}.draining-{time.time_ns()}"
+    try:
+        os.replace(path, aside)
+        with open(aside, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return []
+    finally:
+        try:
+            os.remove(aside)
+        except OSError:
+            pass
+    found = []
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("text"), str) and parsed["text"].strip():
+            found.append(parsed["text"].strip())
+    return found
+
+
+def prompts_waiting(paths):
+    try:
+        return os.path.getsize(paths["prompts"]) > 0
+    except OSError:
+        return False
 
 
 def served_root(port):
@@ -774,6 +817,12 @@ class Rpc:
         self.pending_lock = threading.Lock()
         self.next_id = 1
         self.client = {}
+        self.cancelled = set()
+        self.cancel_lock = threading.Lock()
+
+    def is_cancelled(self, req_id):
+        with self.cancel_lock:
+            return req_id in self.cancelled
 
     def send(self, message):
         line = json.dumps(message, ensure_ascii=False)
@@ -817,8 +866,14 @@ class Rpc:
         if not isinstance(message, dict):
             return
         method, params, req_id = message.get("method"), message.get("params") or {}, message.get("id")
+        if method == "notifications/cancelled":
+            with self.cancel_lock:
+                self.cancelled.add(params.get("requestId"))
+                if len(self.cancelled) > 500:
+                    self.cancelled.clear()
+            return
         try:
-            result = self.handler.dispatch(method, params)
+            result = self.handler.dispatch(method, params, req_id)
         except KeyError:
             if req_id is not None:
                 self.send({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"unknown method {method}"}})
@@ -920,9 +975,11 @@ class Siui:
         self.progress = None  # {world, level}
         self.lock = threading.Lock()  # one record edit at a time within this process
         self.beating = False
+        self.local = threading.local()
+        self.in_flight = 0
 
     # --- the protocol
-    def dispatch(self, method, params):
+    def dispatch(self, method, params, req_id=None):
         if method == "initialize":
             self.rpc.client = params.get("capabilities") or {}
             self.start_heartbeat()
@@ -938,10 +995,10 @@ class Siui:
         if method == "tools/list":
             return {"tools": TOOLS}
         if method == "tools/call":
-            return self.call(params.get("name"), params.get("arguments") or {})
+            return self.call(params.get("name"), params.get("arguments") or {}, req_id)
         raise KeyError(method)
 
-    def call(self, name, args):
+    def call(self, name, args, req_id=None):
         handler = {"card": self.tool_card, "answer": self.tool_answer, "note": self.tool_note, "event": self.tool_event,
                    "done": self.tool_done, "board": self.tool_board, "status": self.tool_status}.get(name)
         if handler is None:
@@ -949,10 +1006,20 @@ class Siui:
         if not isinstance(args, dict):
             args = {}
         self.config = read_config(self.root)
+        self.local.req_id = req_id
+        self.in_flight += 1
         try:
             result, notes = handler(args)
         except ValueError as error:
             return {"content": [{"type": "text", "text": str(error)}], "isError": True}
+        finally:
+            self.in_flight -= 1
+        # What the page sent meanwhile rides on any result: the chat has no other way to hear it.
+        if name != "card" or "fromBoard" not in result:
+            sent = drain_prompts(self.paths)
+            if sent:
+                result["fromBoard"] = sent
+                notes = list(notes) + ["From the board, the user wrote: " + " | ".join(sent) + ". Act on it as their message."]
         text = json.dumps(result, ensure_ascii=False)
         if notes:
             text += "\n\n" + " ".join(notes)
@@ -966,10 +1033,19 @@ class Siui:
         self.beating = True
 
         def beat():
+            told = False
             while True:
                 if os.path.isdir(self.paths["run"]):
                     heartbeat(self.paths)
-                time.sleep(30)
+                    # A message from the page while no call is in flight: the chat hears it at its next turn, and
+                    # the board says so, so the user knows to type something in the chat.
+                    if self.in_flight == 0 and prompts_waiting(self.paths):
+                        if not told:
+                            write_status(self.paths, "idle", "a message from the board waits for your next words in the chat")
+                            told = True
+                    else:
+                        told = False
+                time.sleep(5)
         threading.Thread(target=beat, daemon=True).start()
 
     # --- the card
@@ -982,11 +1058,32 @@ class Siui:
         if ensure_run_folder(self.paths):
             heartbeat(self.paths)
         answer = None
+        # What the page sent before this card: the chat acts on it first, the card shown on the board meanwhile.
+        sent = drain_prompts(self.paths)
+        if sent:
+            publish_card(self.paths, card)
+            write_status(self.paths, "working", "the board's message")
+            return ({"id": card["id"], "level": card["level"], "fromBoard": sent, "awaiting": "re-present"},
+                    ["From the board, the user wrote: " + " | ".join(sent) + ". Act on it as their message; then present this",
+                     "card again with the same fields, unless their words answered it."])
         # The board answers while its page is open (and the page's switch does not keep cards in the chat).
         if is_board_live(self.paths) and not is_chat_first(self.paths):
             publish_card(self.paths, card)
             write_status(self.paths, "waiting", card["title"])
-            answer = self.wait_on_board(card["id"])
+            answer = self.wait_on_board(card["id"], self.config["boardWait"])
+            if isinstance(answer, list):
+                write_status(self.paths, "working", "the board's message")
+                return ({"id": card["id"], "level": card["level"], "fromBoard": answer, "awaiting": "re-present"},
+                        ["From the board, the user wrote: " + " | ".join(answer) + ". Act on it as their message; then present",
+                         "this card again with the same fields, unless their words answered it."])
+            if answer == "round":
+                # The round is over and the page still shows the card: the model calls again, so a client's own
+                # timeout on a tool call never loses the answer.
+                return ({"id": card["id"], "level": card["level"], "awaiting": "board"},
+                        ["The card is still waiting on the board. Call card again now with the same fields and no text;",
+                         "the answer comes back at once when it was given meanwhile."])
+            if answer == "cancelled":
+                return {"id": card["id"], "level": card["level"], "awaiting": "board", "cancelled": True}, []
             if answer is None:
                 publish_card(self.paths, None)
         # Else an elicitation form, when the client draws one.
@@ -1007,14 +1104,22 @@ class Siui:
             return self.dismissed(card)
         return self.settle(card, answer, labels)
 
-    def wait_on_board(self, card_id):
-        """Polls the board's inbox for the answer to the card; None when the page goes away or the wait runs out."""
-        deadline = time.time() + WAIT_SECONDS
+    def wait_on_board(self, card_id, seconds):
+        """Polls the board's inbox for the answer to the card: the answer, DISMISSED, a list of what the page sent
+        instead, "round" when the time is up with the page still there, "cancelled" when the client gave up, None
+        when the page went away."""
+        deadline = time.time() + min(seconds, WAIT_SECONDS)
         last_beat = 0
+        req_id = getattr(self.local, "req_id", None)
         while time.time() < deadline:
+            if req_id is not None and self.rpc.is_cancelled(req_id):
+                return "cancelled"
             if time.time() - last_beat > 20:
                 heartbeat(self.paths)
                 last_beat = time.time()
+            sent = drain_prompts(self.paths)
+            if sent:
+                return sent
             found = read_json(self.paths["inbox"], None)
             if isinstance(found, dict):
                 if found.get("id") == card_id and (str(found.get("answer") or "").strip() or found.get("dismiss")):
@@ -1030,7 +1135,7 @@ class Siui:
             if not is_board_live(self.paths):
                 return None
             time.sleep(0.1)
-        return None
+        return "round" if is_board_live(self.paths) else None
 
     def elicit(self, card, labels):
         """Asks through the client's form: the options as a choice, a field for the user's own words."""

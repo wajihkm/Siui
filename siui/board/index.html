@@ -2205,7 +2205,7 @@
     else if (s.state === 'working') { key = 'working'; label = 'working'; detail = s.detail && s.detail !== 'thinking' ? s.detail : (s.detail === 'thinking' ? 'thinking' : ''); }
     else if (s.state === 'ended') { key = 'ended'; label = 'chat ended'; }
     else if (s.state === 'waiting') { key = 'waiting'; label = 'waiting for you'; }
-    else { key = 'idle'; label = 'chat idle · your turn'; }
+    else { key = 'idle'; label = 'chat idle · your turn'; detail = s.detail || ''; }
     const cls = 'agent ' + key, title = (key === 'waiting' ? 'Click: go to the card and its place on the maps' : 'Click: go to the current stage on the map') + (s && s.at ? ' · since ' + new Date(s.at).toLocaleTimeString() : '');
     if (el.className !== cls) el.className = cls;
     setHtml(el, `<i></i>${esc(label)}${detail ? ` <span class="detail">${esc(detail)}</span>` : ''}`);

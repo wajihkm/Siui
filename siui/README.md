@@ -188,6 +188,15 @@ Copilot read, so an input marked used draws solid on the model's word; forks and
 to a save point are the board's buttons; the chat log is not written. One record and one
 board serve both assistants: a world begun in one goes on in the other.
 
+How the board reaches the chat, which has no door for a message from outside: a card waits
+on the board in rounds of `boardWait` seconds (50 by default, in the configuration), each
+round one call of `card` that hands back "awaiting" and is called again, so a client's own
+limit on a tool call never loses the answer; an answer given between rounds comes back at
+once. What you type on the board (its send box, Note & Notify, Start, New world, Present
+again) ends the round and reaches the chat as your words, the card presented again after;
+while no card waits, it rides on the chat's next call, and the board's header says so, so
+a word typed in the chat is enough to pull it.
+
 ## Packs
 
 A pack is one markdown file: a world, its fixed facts, its levels, and for each level its
@@ -314,6 +323,9 @@ is for the board and need not be committed.
 - `packs` adds up to eight folders where `/siui on <pack>` looks for packs, after the
   project's skill folder and before the plugin's bundled one.
 - `boardPort` is the board server's first port (1024 to 65535).
+- `boardWait`, for GitHub Copilot and the Claude sessions VS Code runs: how many seconds
+  one call of the MCP server's `card` tool waits on the board before being called again
+  (50 by default; 1 to 3600).
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
 - `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
   Hide button on a planned world writes it, its hidden button clears it.
