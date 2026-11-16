@@ -11,6 +11,7 @@ import { CAPS } from './input'
 import { RECORD_PATH } from './record'
 import type { Words } from './words'
 import { DEFAULT_WORDS } from './words'
+import { isAbsolute, join, setPython, trimEnd } from './paths'
 
 export const CONFIG_PATH = '.claude/siui.json'
 
@@ -61,17 +62,23 @@ async function readWords($: EngineInterface, root: string, name: string): Promis
 
 export async function readConfig($: EngineInterface, root: string): Promise<GameConfig> {
   const made = defaultConfig()
-  const base = root.replace(/\/$/, '')
-  const path = `${base}/${CONFIG_PATH}`
-  if (!(await $.fs.exists(path))) return made
+  const base = trimEnd(root)
+  const path = join(base, CONFIG_PATH)
+  if (!(await $.fs.exists(path))) {
+    setPython(undefined)
+
+    return made
+  }
   try {
     const parsed = JSON.parse(await $.fs.read(path)) as Record<string, unknown>
+    // `python` names the command that runs Python 3, when the usual names do not: "py -3", or a full path.
+    setPython(typeof parsed.python === 'string' ? parsed.python : undefined)
     const theme = parsed.theme && typeof parsed.theme === 'object' ? (parsed.theme as Record<string, unknown>) : {}
     const universe = typeof theme.universe === 'string' ? theme.universe.trim() : ''
     if (universe !== '' && UNIVERSE_NAME.test(universe)) made.universe = universe
     made.words = await readWords($, base, made.universe)
     const record = typeof parsed.record === 'string' ? parsed.record.trim() : ''
-    if (record !== '' && !record.includes('..') && !record.startsWith('/')) made.record = record
+    if (record !== '' && !record.includes('..') && !isAbsolute(record)) made.record = record
     const caps = parsed.caps && typeof parsed.caps === 'object' ? (parsed.caps as Record<string, unknown>) : {}
     for (const key of Object.keys(CAPS) as Array<keyof Caps>) {
       const value = caps[key]
@@ -80,7 +87,7 @@ export async function readConfig($: EngineInterface, root: string): Promise<Game
       }
     }
     const chatLog = typeof parsed.chatLog === 'string' ? parsed.chatLog.trim() : ''
-    if (chatLog !== '' && !chatLog.includes('..') && !chatLog.startsWith('/')) made.chatLog = chatLog
+    if (chatLog !== '' && !chatLog.includes('..') && !isAbsolute(chatLog)) made.chatLog = chatLog
     const port = parsed.boardPort
     if (typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535) made.boardPort = port
     if (Array.isArray(parsed.packs)) {

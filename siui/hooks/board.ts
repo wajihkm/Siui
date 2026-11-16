@@ -11,6 +11,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GameCard } from '../types'
+import { homeOf, isWindows, join, launch, python, samePath, trimEnd } from './paths'
 
 const DEFAULT_PORT = 5131
 const RUN_FOLDER = 'siui'
@@ -40,12 +41,14 @@ export type ChatStatus = 'idle' | 'working' | 'waiting' | 'ended'
 
 /**
  * The runtime files of a project's board: under `$HOME/.cache/siui/<slug>`,
- * or under /tmp when HOME is unset. The board's server is given the same folder.
+ * on Windows under `%LOCALAPPDATA%\siui\<slug>`, or under /tmp when no home
+ * is known. The board's server is given the same folder.
  */
 export async function boardPaths($: EngineInterface, root: string): Promise<BoardPaths> {
   const slug = root.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(-80) || 'project'
-  const home = ((await $.env.get('HOME')) ?? '').replace(/\/$/, '')
-  const run = home ? `${home}/.cache/${RUN_FOLDER}/${slug}` : `/tmp/${RUN_FOLDER}/${slug}`
+  const home = (await homeOf($)) ?? ''
+  const local = (await isWindows($)) ? trimEnd((await $.env.get('LOCALAPPDATA')) ?? '') : ''
+  const run = local ? join(local, RUN_FOLDER, slug) : home ? join(home, '.cache', RUN_FOLDER, slug) : `/tmp/${RUN_FOLDER}/${slug}`
 
   return {
     run,
@@ -97,10 +100,10 @@ export async function countdownOnBoard(
   cardId: string,
   seconds: number,
 ): Promise<string | 'auto' | undefined> {
-  const script = `${$.plugin.root}/board/wait.py`
+  const script = join($.plugin.root, 'board', 'wait.py')
   let ran
   try {
-    ran = await $.process.run(['python3', '-I', script, paths.run, cardId, String(seconds), 'auto'], { timeoutMs: 60_000 })
+    ran = await $.process.run([...(await python($)), '-I', script, paths.run, cardId, String(seconds), 'auto'], { timeoutMs: 60_000 })
   } catch {
     return undefined
   }
@@ -176,26 +179,16 @@ export async function serverPort($: EngineInterface, paths: BoardPaths): Promise
  * board another's files). Resolves false when the folder cannot be used.
  */
 async function ensureRunFolder($: EngineInterface, paths: BoardPaths): Promise<boolean> {
-  const folder = quote(paths.run)
-  try {
-    const made = await $.process.run(
-      ['sh', '-c', `mkdir -p ${folder} && chmod 700 ${folder} && python3 -c 'import os,sys; sys.exit(os.stat(sys.argv[1]).st_uid != os.getuid())' ${folder}`],
-      { timeoutMs: 10_000 },
-    )
-
-    return made.exitCode === 0
-  } catch {
-    return false
-  }
+  return (await launch($, ['folder', paths.run])).exitCode === 0
 }
 
 /**
  * Starts the server detached unless one answers already for this project,
  * and returns its port. A server that answers but serves another root (a
  * stale port file, another project's server on the same port) is left alone
- * and a fresh one starts on the next port. The shell line redirects every
- * stream, so the command returns at once and the server lives on; the server
- * exits by itself when the heartbeat stops.
+ * and a fresh one starts on the next port. The launcher starts it detached,
+ * so the command returns at once and the server lives on; the server exits
+ * by itself when the heartbeat stops.
  */
 export async function ensureServer(
   $: EngineInterface,
@@ -212,34 +205,30 @@ export async function ensureServer(
   }
   await $.fs.write(paths.heartbeat, String(Date.now()))
   // A stop file left by `board off` would end the server we are about to reuse or start.
-  if (await $.fs.exists(paths.stop)) await $.process.run(['rm', '-f', paths.stop], { timeoutMs: 5_000 })
+  if (await $.fs.exists(paths.stop)) await launch($, ['remove', paths.stop])
   const running = await serverPort($, paths)
   let startAt = port
   if (running !== undefined) {
     const served = await servedRoot($, running)
-    if (served !== undefined && served === root.replace(/\/$/, '')) return running
+    if (served !== undefined && samePath(served, root)) return running
     if (served !== undefined) startAt = running + 1
   }
-  const script = `${$.plugin.root}/board/server.py`
   const ipc = (await $.env.get('VSCODE_IPC_HOOK_CLI')) ?? ''
-  const line = [
-    'nohup python3 -I',
-    quote(script),
-    ...(ipc ? ['--ipc', quote(ipc)] : []),
+  const startedAt = Date.now()
+  await launch($, [
+    'start',
+    ...(ipc ? ['--ipc', ipc] : []),
     '--root',
-    quote(root),
+    root,
     '--run',
-    quote(paths.run),
+    paths.run,
     '--record',
-    quote(record),
+    record,
     '--chat',
-    quote(chatLog),
+    chatLog,
     '--port',
     String(startAt),
-    `> ${quote(`${paths.run}/server.log`)} 2>&1 < /dev/null &`,
-  ].join(' ')
-  const startedAt = Date.now()
-  await $.process.run(['sh', '-c', line], { timeoutMs: 10_000 })
+  ])
   for (let i = 0; i < 20; i += 1) {
     await $.clock.sleep(250)
     const made = await serverPort($, paths)
@@ -263,30 +252,11 @@ async function isPortFileFresh($: EngineInterface, paths: BoardPaths, since: num
 
 /** The project root a server on `port` reports in GET /state; undefined when nothing answers. */
 async function servedRoot($: EngineInterface, port: number): Promise<string | undefined> {
-  try {
-    const probe = await $.process.run(['python3', '-I', '-c', probeScript(port)], { timeoutMs: 5_000 })
-    if (probe.exitCode !== 0) return undefined
-    const root = probe.stdout.trim()
+  const probe = await launch($, ['probe', String(port)], 5_000)
+  if (probe.exitCode !== 0) return undefined
+  const root = probe.stdout.trim()
 
-    return root === '' ? undefined : root.replace(/\/$/, '')
-  } catch {
-    return undefined
-  }
-}
-
-function probeScript(port: number): string {
-  return [
-    'import json,urllib.request,sys',
-    'try:',
-    `  state=json.load(urllib.request.urlopen('http://127.0.0.1:${port}/state',timeout=2))`,
-    "  print(str(state.get('root') or ''))",
-    'except Exception:',
-    '  sys.exit(1)',
-  ].join('\n')
-}
-
-function quote(text: string): string {
-  return `'${text.replace(/'/g, `'\\''`)}'`
+  return root === '' ? undefined : trimEnd(root)
 }
 
 /** Opens the page in the user's browser: Windows' default from WSL, else the desktop's. */
@@ -321,11 +291,12 @@ export async function publishCard($: EngineInterface, paths: BoardPaths, card: G
  * page went away (the card then goes to the chat dialog).
  */
 export async function waitOnBoard($: EngineInterface, paths: BoardPaths, cardId: string): Promise<string | undefined> {
-  const script = `${$.plugin.root}/board/wait.py`
+  const script = join($.plugin.root, 'board', 'wait.py')
+  const command = await python($)
   for (let round = 0; round < 24; round += 1) {
     let ran
     try {
-      ran = await $.process.run(['python3', '-I', script, paths.run, cardId, WAIT_SECONDS], { timeoutMs: 600_000 })
+      ran = await $.process.run([...command, '-I', script, paths.run, cardId, WAIT_SECONDS], { timeoutMs: 600_000 })
     } catch {
       return undefined
     }
@@ -355,13 +326,13 @@ export async function drainPrompts($: EngineInterface, paths: BoardPaths): Promi
   const aside = `${paths.prompts}.draining-${Date.now()}`
   let text = ''
   try {
-    const moved = await $.process.run(['mv', '-f', paths.prompts, aside], { timeoutMs: 5_000 })
+    const moved = await launch($, ['move', paths.prompts, aside], 5_000)
     if (moved.exitCode !== 0) return []
     text = await $.fs.read(aside)
   } catch {
     return []
   } finally {
-    void $.process.run(['rm', '-f', aside], { timeoutMs: 5_000 }).catch(() => undefined)
+    void launch($, ['remove', aside], 5_000)
   }
   if (text.trim() === '') return []
   const found: string[] = []

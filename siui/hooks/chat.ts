@@ -3,6 +3,7 @@
 // shows what was said around each step. Kept in the project beside the
 // record, as JSON lines, appended by the `turn.complete` hook.
 
+import { join } from './paths'
 import type { EngineInterface } from 'claude-code'
 
 export const CHAT_PATH = '.claude/chat-log.jsonl'
@@ -14,7 +15,7 @@ const ROLL_BYTES = 2 * 1024 * 1024
 export type ChatTurn = { at: string; world: number | null; level: string; user: string; assistant: string }
 
 export function chatPath(root: string, relative: string = CHAT_PATH): string {
-  return `${root.replace(/\/$/, '')}/${relative.replace(/^\.?\//, '')}`
+  return join(root, relative.replace(/^\.?\//, ''))
 }
 
 function cutText(text: string, max: number): string {

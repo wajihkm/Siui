@@ -7,25 +7,26 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GameSource } from '../types'
+import { baseName as lastPart, fileUrl, isAbsolute, join, normalise } from './paths'
 
 /** Files every session is given, so they count as read without a Read call. */
 const ALWAYS_READ = new Set(['CLAUDE.md', 'AGENTS.md'])
 
 /** An absolute path for `path` as the model wrote it: project-relative, `~/...` or absolute. */
 export function absolutePath(path: string, root: string, home: string | undefined): string {
-  if (path.startsWith('/')) return path
-  if (path === '~' || path.startsWith('~/')) return `${home ?? ''}${path.slice(1)}`
+  if (isAbsolute(path)) return path
+  if (path === '~' || path.startsWith('~/') || path.startsWith('~\\')) return `${home ?? ''}${path.slice(1)}`
 
-  return `${root.replace(/\/$/, '')}/${path.replace(/^\.\//, '')}`
+  return join(root, path)
 }
 
 /** The `file:` URL a card links to. */
 export function hrefOf(absolute: string): string {
-  return `file://${encodeURI(absolute)}`
+  return fileUrl(absolute)
 }
 
 function baseName(absolute: string): string {
-  return absolute.split('/').filter(Boolean).pop() ?? absolute
+  return lastPart(absolute)
 }
 
 export function isInput(source: GameSource): boolean {
@@ -59,7 +60,7 @@ export async function resolveSources(
   home: string | undefined,
   readPaths: readonly string[],
 ): Promise<{ sources: GameSource[]; downgraded: string[] }> {
-  const read = new Set(readPaths)
+  const read = new Set(readPaths.map(normalise))
   const settled: GameSource[] = []
   const downgraded: string[] = []
 
@@ -76,7 +77,7 @@ export async function resolveSources(
         // no size: the node keeps its base size
       }
     }
-    if (exists && (read.has(absolute) || ALWAYS_READ.has(baseName(absolute)))) one.isRead = true
+    if (exists && (read.has(normalise(absolute)) || ALWAYS_READ.has(baseName(absolute)))) one.isRead = true
     if (source.role === 'in' && one.use === 'used' && !one.isRead) {
       one.use = 'maybe'
       downgraded.push(source.path)
@@ -90,8 +91,8 @@ export async function resolveSources(
 /** The paths a Skill call reads: the project's skill folder first, then the plugin's bundled one, then the user's. */
 export function skillPaths(skill: string, root: string, home: string | undefined): string[] {
   const name = skill.replace(/^.*:/, '').trim()
-  if (name === '' || name.includes('/') || name.includes('..')) return []
-  const paths = [`${root.replace(/\/$/, '')}/.claude/skills/${name}/SKILL.md`, `${root.replace(/\/$/, '')}/skills/${name}/SKILL.md`]
+  if (name === '' || /[\\/]/.test(name) || name.includes('..')) return []
+  const paths = [join(root, '.claude', 'skills', name, 'SKILL.md'), join(root, 'skills', name, 'SKILL.md')]
   if (home) paths.push(`${home}/.claude/skills/${name}/SKILL.md`)
 
   return paths

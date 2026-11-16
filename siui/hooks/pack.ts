@@ -4,6 +4,8 @@
 
 import type { EngineInterface } from 'claude-code'
 
+import { homeOf, isAbsolute, join, trimEnd } from './paths'
+
 export type PlanCard = { id: string; title: string }
 export type PlanLevel = { level: string; title: string; count?: number; cards?: PlanCard[] }
 
@@ -84,14 +86,14 @@ export function packCandidates(
   extra: readonly string[] = [],
 ): string[] {
   const name = pack.replace(/\.md$/, '')
-  if (name === '' || name.includes('/') || name.includes('..')) return []
-  const base = root.replace(/\/$/, '')
+  if (name === '' || /[\\/]/.test(name) || name.includes('..')) return []
+  const base = trimEnd(root)
   const paths = [`${base}/.claude/skills/decision-cards/packs/${name}.md`]
   for (const folder of extra) {
-    const absolute = folder.startsWith('/') ? folder : `${base}/${folder}`
+    const absolute = isAbsolute(folder) ? folder : join(base, folder)
     paths.push(`${absolute.replace(/\/$/, '')}/${name}.md`)
   }
-  paths.push(`${pluginRoot.replace(/\/$/, '')}/packs/${name}.md`)
+  paths.push(join(pluginRoot, 'packs', `${name}.md`))
   if (home) paths.push(`${home}/.claude/skills/decision-cards/packs/${name}.md`)
 
   return paths
@@ -100,7 +102,7 @@ export function packCandidates(
 /** The plan of a pack, read from the first candidate that exists; empty when none. */
 /** The first place the pack is found, or undefined. */
 export async function findPack($: EngineInterface, pack: string, root: string, extra: string[]): Promise<string | undefined> {
-  const home = (await $.env.get('HOME')) ?? ''
+  const home = (await homeOf($)) ?? ''
   for (const path of packCandidates(pack, root, home, $.plugin.root, extra)) {
     if (await $.fs.exists(path)) return path
   }
@@ -114,7 +116,7 @@ export async function readPlan(
   root: string,
   extra: readonly string[] = [],
 ): Promise<PlanLevel[]> {
-  const home = await $.env.get('HOME')
+  const home = await homeOf($)
   for (const path of packCandidates(pack, root, home, $.plugin.root, extra)) {
     if (await $.fs.exists(path)) {
       try {
