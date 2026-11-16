@@ -350,5 +350,5 @@ claude plugin validate siui --profile directory
 While developing, a symlink to `siui/` in a session's `~/.claude/dev-mods/<session>/`
 folder hot-reloads on save. The engine lays its API types in `.claude-plugin/types/` at
 every load (ignored by git), which `tsconfig.json` extends for the editor. A release is
-one git tag, `siui--v<version>`, made with `claude plugin tag siui`, the manifest bumped
+one git tag, the plain version (`1.1.0`), made with `git tag -a <version>`, the manifest bumped
 with it.
