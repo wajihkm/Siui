@@ -121,7 +121,14 @@ export async function countdownOnBoard(
 /** Tells the board what the chat is doing; a tool's name or a card's title as the detail. */
 export async function writeStatus($: EngineInterface, paths: BoardPaths, state: ChatStatus, detail = ''): Promise<void> {
   try {
-    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now() })}\n`)
+    // The model the main loop runs, as /model shows it: the board names it beside the chat's state.
+    let model = ''
+    try {
+      model = await $.session.model()
+    } catch {
+      // an engine without the call: the board shows no model
+    }
+    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now(), ...(model ? { model } : {}) })}\n`)
   } catch {
     // the board is a mirror; a missed status costs nothing
   }
