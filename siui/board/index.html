@@ -1998,7 +1998,8 @@
   function exportRows(run) {
     return overview(run).map(v => ({
       level: v.level, title: v.title, status: STATUS[stageStatus(v, run)].word, isBoss: v.isBoss,
-      cards: v.decisions.map(d => ({ title: d.title, answer: d.answer, at: d.at, via: d.via || 'card', queued: !!d.queued })),
+      cost: costOf([...v.decisions, ...(v.chat || []), ...(v.skipped || [])]),
+      cards: v.decisions.map(d => ({ title: d.title, answer: d.answer, at: d.at, via: d.via || 'card', queued: !!d.queued, cost: typeof d.cost === 'number' ? d.cost : 0 })),
       chat: (v.chat || []).map(d => ({ title: d.title, answer: d.answer, at: d.at, why: d.why || '' })),
       skipped: (v.skipped || []).map(d => ({ title: d.title, at: d.at })),
       marks: eventsOf(run.world, v.level).map(ev => ({ kind: KINDS[ev.kind] ? KINDS[ev.kind].name : ev.kind, title: ev.title, status: ev.status, done: KINDS[ev.kind] ? KINDS[ev.kind].done : 'done' })),
@@ -2006,16 +2007,21 @@
   }
   function exportWorlds() {
     const runs = ((state && state.record && state.record.runs) || []).slice().sort((a, b) => (isSide(a) ? 1 : 0) - (isSide(b) ? 1 : 0) || a.world - b.world);
-    return runs.map(run => ({ run, name: isSide(run) ? 'Side quests' : `${Wc('world')} ${run.world} · ${shortPack(run)}`, rows: exportRows(run) }));
+    return runs.map(run => ({ run, name: isSide(run) ? 'Side quests' : `${Wc('world')} ${run.world} · ${shortPack(run)}`, rows: exportRows(run), cost: costOf(run.decisions) }));
   }
   function exportMarkdown() {
     const cell = t => String(t).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    const worlds = exportWorlds();
+    const total = worlds.reduce((sum, one) => sum + one.cost, 0);
+    const spent = n => n > 0 ? ` · ${money(n)}` : '';
     const lines = [`# ${state.project}: the roadmap`, '', `Exported ${new Date().toLocaleString()} from the Siui board · universe ${U.title}.`, ''];
-    exportWorlds().forEach(({ run, name, rows }) => {
-      lines.push(`## ${name} · ${runState(run).label}`, '');
+    if (total > 0) lines.push(`Cost counted: ${money(total)}, the session's spend at API prices on the decisions that carry one.`, '');
+    worlds.forEach(({ run, name, rows, cost }) => {
+      lines.push(`## ${name} · ${runState(run).label}${spent(cost)}`, '');
       rows.forEach(r => {
-        lines.push(`### ${r.level} ${r.title}${r.isBoss ? ` (${w('boss')})` : ''} · ${r.status}`, '');
-        if (r.cards.length) { lines.push(`| ${Wc('card')} | Answer | When | By |`, '|---|---|---|---|'); r.cards.forEach(c => lines.push(`| ${cell(c.title)} | ${cell(c.answer)} | ${when(c.at)} | ${c.via}${c.queued ? ', queued' : ''} |`)); lines.push(''); }
+        lines.push(`### ${r.level} ${r.title}${r.isBoss ? ` (${w('boss')})` : ''} · ${r.status}${spent(r.cost)}`, '');
+        const priced = r.cards.some(c => c.cost > 0);
+        if (r.cards.length) { lines.push(`| ${Wc('card')} | Answer | When | By |${priced ? ' Cost |' : ''}`, `|---|---|---|---|${priced ? '---:|' : ''}`); r.cards.forEach(c => lines.push(`| ${cell(c.title)} | ${cell(c.answer)} | ${when(c.at)} | ${c.via}${c.queued ? ', queued' : ''} |${priced ? ` ${c.cost > 0 ? money(c.cost) : ''} |` : ''}`)); lines.push(''); }
         if (r.chat.length) { lines.push('Decided in the chat:', ''); r.chat.forEach(c => lines.push(`- ${c.title}: ${c.answer}${c.why ? ` (${c.why})` : ''}`)); lines.push(''); }
         if (r.skipped.length) lines.push('Skipped: ' + r.skipped.map(c => c.title).join(', '), '');
         if (r.marks.length) { lines.push('On the map:', ''); r.marks.forEach(m => lines.push(`- ${m.kind}: ${m.title} (${m.status === 'done' ? m.done : 'open'})`)); lines.push(''); }
@@ -2026,19 +2032,22 @@
   function exportHtml() {
     const roadmap = exportSvgOf('roadmap');
     const shown = pickRun(state.record);
-    const worldsHtml = exportWorlds().map(({ run, name, rows }) => {
+    const worlds = exportWorlds();
+    const total = worlds.reduce((sum, one) => sum + one.cost, 0);
+    const spent = n => n > 0 ? ` · ${esc(money(n))}` : '';
+    const worldsHtml = worlds.map(({ run, name, rows, cost }) => {
       let mapSvg = '';
       if (!run.isPack) { try { renderMap(run); mapSvg = exportSvgOf('map'); } catch (err) { mapSvg = `<p class="h">map not drawn: ${esc(String(err && err.message || err))}</p>`; } }
-      const stages = rows.map(r => `<details open><summary><b>${esc(r.level)} ${esc(r.title)}</b>${r.isBoss ? ` · ${esc(w('boss'))}` : ''} · <i>${esc(r.status)}</i></summary>` +
-        (r.cards.length ? `<table><tr><th>${esc(Wc('card'))}</th><th>Answer</th><th>When</th><th>By</th></tr>${r.cards.map(c => `<tr><td>${esc(c.title)}</td><td>${esc(c.answer)}</td><td>${esc(when(c.at))}</td><td>${esc(c.via)}${c.queued ? ', queued' : ''}</td></tr>`).join('')}</table>` : '') +
+      const stages = rows.map(r => { const priced = r.cards.some(c => c.cost > 0); return `<details open><summary><b>${esc(r.level)} ${esc(r.title)}</b>${r.isBoss ? ` · ${esc(w('boss'))}` : ''} · <i>${esc(r.status)}</i>${spent(r.cost)}</summary>` +
+        (r.cards.length ? `<table><tr><th>${esc(Wc('card'))}</th><th>Answer</th><th>When</th><th>By</th>${priced ? '<th style="text-align:right">Cost</th>' : ''}</tr>${r.cards.map(c => `<tr><td>${esc(c.title)}</td><td>${esc(c.answer)}</td><td>${esc(when(c.at))}</td><td>${esc(c.via)}${c.queued ? ', queued' : ''}</td>${priced ? `<td style="text-align:right">${c.cost > 0 ? esc(money(c.cost)) : ''}</td>` : ''}</tr>`).join('')}</table>` : '') +
         (r.chat.length ? `<p class="h">Decided in the chat</p><ul>${r.chat.map(c => `<li>${esc(c.title)}: ${esc(c.answer)}${c.why ? ` <i>(${esc(c.why)})</i>` : ''}</li>`).join('')}</ul>` : '') +
         (r.skipped.length ? `<p class="h">Skipped</p><ul>${r.skipped.map(c => `<li>${esc(c.title)}</li>`).join('')}</ul>` : '') +
-        (r.marks.length ? `<p class="h">On the map</p><ul>${r.marks.map(m => `<li>${esc(m.kind)}: ${mdInline(m.title)} <i>(${m.status === 'done' ? esc(m.done) : 'open'})</i></li>`).join('')}</ul>` : '') + '</details>').join('');
-      return `<section><h2>${esc(name)} <i>${esc(runState(run).label)}</i></h2>${mapSvg}${stages}</section>`;
+        (r.marks.length ? `<p class="h">On the map</p><ul>${r.marks.map(m => `<li>${esc(m.kind)}: ${mdInline(m.title)} <i>(${m.status === 'done' ? esc(m.done) : 'open'})</i></li>`).join('')}</ul>` : '') + '</details>'; }).join('');
+      return `<section><h2>${esc(name)} <i>${esc(runState(run).label)}${spent(cost)}</i></h2>${mapSvg}${stages}</section>`;
     }).join('');
     try { if (shown) renderMap(shown); } catch (err) { /* the next poll redraws it */ }
     const vars = ['--bg', '--panel', '--text', '--dim', '--line', '--accent'].map(v => `${v}:${cssVar(v)}`).join(';');
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(state.project)}: the roadmap</title><style>:root{${vars}}body{margin:0 auto;padding:24px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif;max-width:1100px}h1{font-size:22px}h2{font-size:17px;margin:28px 0 8px}h2 i{color:var(--dim);font-weight:400;font-size:13px}section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:14px 0}svg{max-width:100%;height:auto;display:block;margin:8px 0}details{margin:10px 0}summary{cursor:pointer}table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--dim);font-weight:600;font-size:12px}.h{margin:10px 0 2px;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.06em}ul{margin:4px 0 8px 18px;padding:0}p.meta{color:var(--dim);font-size:13px}</style></head><body><h1>${esc(state.project)}: the roadmap</h1><p class="meta">Exported ${esc(new Date().toLocaleString())} from the Siui board · universe ${esc(U.title)}</p><section><h2>${esc(Wc('roadmap'))}</h2>${roadmap}</section>${worldsHtml}</body></html>`;
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(state.project)}: the roadmap</title><style>:root{${vars}}body{margin:0 auto;padding:24px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif;max-width:1100px}h1{font-size:22px}h2{font-size:17px;margin:28px 0 8px}h2 i{color:var(--dim);font-weight:400;font-size:13px}section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:14px 0}svg{max-width:100%;height:auto;display:block;margin:8px 0}details{margin:10px 0}summary{cursor:pointer}table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--dim);font-weight:600;font-size:12px}.h{margin:10px 0 2px;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.06em}ul{margin:4px 0 8px 18px;padding:0}p.meta{color:var(--dim);font-size:13px}</style></head><body><h1>${esc(state.project)}: the roadmap</h1><p class="meta">Exported ${esc(new Date().toLocaleString())} from the Siui board · universe ${esc(U.title)}${total > 0 ? ` · cost counted ${esc(money(total))}, at API prices` : ''}</p><section><h2>${esc(Wc('roadmap'))}</h2>${roadmap}</section>${worldsHtml}</body></html>`;
   }
   async function doExport(kind) {
     const text = kind === 'html' ? exportHtml() : kind === 'md' ? exportMarkdown() : exportSvgOf('roadmap');

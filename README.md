@@ -53,6 +53,8 @@ every command, the board, the universes, the record and the configuration.
 - The board: a local page that draws the roadmap of worlds, the world map, each stage as a
   side-scrolling level and each step with its decisions, notes, files and the chat around
   it; cards are answered there while it is open.
+- Cost: what each decision, stage and world cost, read off the session's own ledger, on
+  the board and in the exports; the model and the session's usage beside the chat's state.
 - Auto-pilot: a card with a recommendation is answered with it after a countdown; a boss,
   a bug, a problem or a card without advice waits for you.
 - Checkpoints: save points, a git commit of the whole tree, drawn on the stage; returning
