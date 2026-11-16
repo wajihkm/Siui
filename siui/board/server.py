@@ -1051,6 +1051,30 @@ def make_handler(board):
     return Handler
 
 
+def port_answers(port):
+    """Whether something already listens on the port. Windows lets two programs bind one port, and WSL relays its
+    own listeners onto Windows' localhost: a board bound there would sit behind another, unreachable."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+class BoardServer(ThreadingHTTPServer):
+    """On Windows the address is taken for this server alone, never shared with another listener."""
+
+    if os.name == "nt":
+        allow_reuse_address = False
+
+        def server_bind(self):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, help="the project root")
@@ -1066,7 +1090,9 @@ def main():
     port = args.port
     for candidate in board.ports:
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", candidate), make_handler(board))
+            if port_answers(candidate):
+                continue
+            server = BoardServer(("127.0.0.1", candidate), make_handler(board))
             port = candidate
             break
         except OSError:
