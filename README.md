@@ -7,6 +7,8 @@ decision-cards is the skill, kept outside the plugin in `skills/decision-cards/`
 rules and the record, which also work with no plugin at all. The plugin ships one pack,
 `scaffold`, for a new project; a project writes its own.
 
+![A tour of Siui: one card at a time, worlds on a roadmap, each stage a level, what it cost](media/siui-tour.gif)
+
 ## Quick start
 
 ```
