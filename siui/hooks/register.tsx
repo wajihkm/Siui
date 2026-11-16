@@ -34,6 +34,7 @@ import type { RunFork } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
 import { setWords } from './words'
+import { claimPending, resetCost, setCostTarget, settleCost } from './cost'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
 import { mapSvg } from './map'
@@ -473,6 +474,7 @@ let config: GameConfig = defaultConfig()
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
+    await resetCost($)
     await $.tool.register({
       name: 'card',
       description: CARD_DESCRIPTION,
@@ -638,6 +640,13 @@ export const register: Register = on => {
         }
       }
       turnHadWork = false
+      // The turn's cost goes to the decision that was current.
+      try {
+        const costs = await readRecord($, root, config.record)
+        if (await settleCost($, costs)) await writeRecord($, root, costs, config.record)
+      } catch {
+        // the cost is a mirror of the session's ledger; a missed reading is caught up at the next
+      }
       // Subagents still at work keep the board on "working" after the main turn ends.
       const running = agentsRunning()
       await writeStatus($, await boardPaths($, root), running > 0 ? 'working' : 'idle', running > 0 ? `${running} agent${running > 1 ? 's' : ''} running` : '')
@@ -1020,7 +1029,13 @@ export const register: Register = on => {
         const plan = await readPlan($, current.pack, root, config.packs)
         if (plan.length > 0) run.plan = plan
       }
+      // What was spent up to this answer belongs to the decision before; from here on, to this one.
+      await settleCost($, record)
+      const hadCost = run.decisions.find(one => one.level === decision.level && one.id === decision.id)?.cost ?? 0
+      const ownCost = hadCost + claimPending()
+      if (ownCost > 0) decision.cost = Math.round(ownCost * 10000) / 10000
       addDecision(run, decision, routed.levelTitle ?? current.levelTitle, routed.levelTitle ? undefined : current.count)
+      setCostTarget(run.id, decision.level, decision.id)
       await writeRecord($, root, record, config.record)
       await update($, history, list => [...list.filter(one => !(one.level === decision.level && one.id === decision.id)), decision].slice(-200))
       const decided = run.decisions.filter(one => one.level === decision.level).length
