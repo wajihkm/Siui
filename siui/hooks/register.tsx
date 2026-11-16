@@ -34,6 +34,7 @@ import type { RunFork } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
 import { setWords } from './words'
+import { homeOf } from './paths'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
 import { mapSvg } from './map'
@@ -580,7 +581,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true && typeof e.skill === 'string') {
       const root = await $.session.root()
-      const home = await $.env.get('HOME')
+      const home = await homeOf($)
       const found: string[] = []
       for (const path of skillPaths(e.skill, root, home)) {
         if (await $.fs.exists(path)) found.push(path)
@@ -858,7 +859,7 @@ export const register: Register = on => {
     const made = normaliseCard(e as unknown as Record<string, unknown>, config.caps)
     if (typeof made === 'string') return { deny: `card: ${made}` }
 
-    const home = await $.env.get('HOME')
+    const home = await homeOf($)
     const seen = await read($, readPaths)
     const { sources, downgraded } = await resolveSources($, made.sources, root, home, seen)
     const current: GameCard = { ...made, sources }

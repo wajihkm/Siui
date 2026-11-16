@@ -11,6 +11,7 @@ import type { GameDecision, GameEvent } from '../types'
 import type { RunFork } from './checkpoint'
 import type { PlanLevel } from './pack'
 import { nextCardOf } from './pack'
+import { baseName, join, launch } from './paths'
 import { words } from './words'
 
 export const RECORD_PATH = '.claude/decisions.json'
@@ -95,11 +96,11 @@ export function putEvent(record: GameRecord, event: GameEvent): GameEvent {
 }
 
 export function recordPath(root: string, relative: string = RECORD_PATH): string {
-  return `${root.replace(/\/$/, '')}/${relative.replace(/^\.?\//, '')}`
+  return join(root, relative.replace(/^\.?\//, ''))
 }
 
 export function targetOf(root: string): string {
-  return root.split('/').filter(Boolean).pop() ?? 'project'
+  return baseName(root) || 'project'
 }
 
 function asText(value: unknown, fallback = ''): string {
@@ -198,7 +199,7 @@ export async function readRecord($: EngineInterface, root: string, relative: str
   try {
     await $.fs.write(aside, text)
     await $.fs.write(path, `${JSON.stringify(emptyRecord(), null, 2)}\n`)
-    $.ui.toast(`The decisions file was unreadable; kept aside as ${aside.split('/').pop()}`)
+    $.ui.toast(`The decisions file was unreadable; kept aside as ${baseName(aside)}`)
   } catch {
     // nothing more to do: the fresh record below is returned either way
   }
@@ -264,13 +265,13 @@ export async function writeRecord(
   const temporary = `${path}.tmp-${Date.now()}`
   try {
     await $.fs.write(temporary, text)
-    const moved = await $.process.run(['mv', '-f', temporary, path], { timeoutMs: 10_000 })
+    const moved = await launch($, ['move', temporary, path])
     if (moved.exitCode === 0) return
   } catch {
     // no temporary file or no rename: the plain write below stands in
   }
   await $.fs.write(path, text)
-  void $.process.run(['rm', '-f', temporary], { timeoutMs: 10_000 }).catch(() => undefined)
+  void launch($, ['remove', temporary])
 }
 
 export const SIDE_PACK = 'side'

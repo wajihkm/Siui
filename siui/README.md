@@ -31,11 +31,13 @@ there opens the explanation. The record grows in `.claude/decisions.json`.
 
 - A current Claude Code (the plugin API is early-access and the board was built on
   2.1.310).
-- `python3` on PATH, for the board (standard library only).
+- Python 3 on PATH, for the board (standard library only): `python3`, `python` or
+  `py -3`, the first that answers; `python` in the configuration names another.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
-- Linux, WSL or macOS; Windows through WSL. The board's server and its shell lines
-  were built and tested on Linux and WSL.
+- Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
+  one Python launcher. Built and used daily on Linux and WSL; on Windows the launcher and
+  the server are proven by script, a full session less so yet.
 
 ## The commands
 
@@ -144,7 +146,7 @@ header covers decisions, marks, levels, worlds and chat turns.
 The server is the Python 3 standard library, bound to 127.0.0.1; it takes a POST only
 with a JSON content type and a localhost Origin or Host, so no website can post to it.
 Runtime files (the live card, the inboxes, the liveness marks) live under
-`~/.cache/siui/<project>/`, made 0700, never in the project. `/siui board off`
+`~/.cache/siui/<project>/`, made 0700 (on Windows `%LOCALAPPDATA%\siui\<project>\`), never in the project. `/siui board off`
 stops the server; it also stops by itself a few minutes after the session ends.
 `boardPort` in the configuration picks the port (5131 by default, then the next nine).
 
@@ -279,6 +281,8 @@ is for the board and need not be committed.
 - `packs` adds up to eight folders where `/siui on <pack>` looks for packs, after the
   project's skill folder and before the plugin's bundled one.
 - `boardPort` is the board server's first port (1024 to 65535).
+- `python` names the command that runs Python 3 when the usual names do not: `"py -3"`,
+  or a full path.
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
 - `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
   Hide button on a planned world writes it, its hidden button clears it.

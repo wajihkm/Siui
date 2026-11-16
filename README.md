@@ -33,11 +33,13 @@ every command, the board, the universes, the record and the configuration.
 
 - A current Claude Code (the plugin API is early-access and the board was built on
   2.1.310): the VS Code extension, the desktop app or the terminal.
-- `python3` on PATH, for the board (standard library only).
+- Python 3 on PATH, for the board (standard library only): `python3`, `python` or
+  `py -3`, the first that answers; `python` in the configuration names another.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
-- Linux, WSL or macOS; Windows through WSL. The board's server and its shell lines
-  were built and tested on Linux and WSL.
+- Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
+  one Python launcher. Built and used daily on Linux and WSL; on Windows the launcher and
+  the server are proven by script, a full session less so yet.
 
 ## What makes it different
 

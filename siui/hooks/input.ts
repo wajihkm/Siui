@@ -165,7 +165,7 @@ function slug(value: unknown): string {
 }
 
 function nameOf(path: string, max: number): string {
-  const last = path.split('/').filter(Boolean).pop() ?? path
+  const last = path.split(/[\\/]/).filter(Boolean).pop() ?? path
 
   return cut(last.replace(/\.(md|json|ya?ml|txt)$/i, ''), max)
 }

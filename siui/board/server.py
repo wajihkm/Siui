@@ -81,13 +81,33 @@ def touch(path):
     os.utime(path, None)
 
 
-def find_code():
-    """The VS Code CLI of the running server, newest first; else `code` on PATH."""
+def find_remote_code():
+    """The VS Code CLI of a remote or WSL server on this machine, newest first; None on a plain desktop."""
     home = os.path.expanduser("~")
     found = glob.glob(os.path.join(home, ".vscode-server", "bin", "*", "bin", "remote-cli", "code"))
-    if found:
-        return max(found, key=os.path.getmtime)
-    return shutil.which("code")
+    return max(found, key=os.path.getmtime) if found else None
+
+
+def open_locally(absolute):
+    """Opens a file on a plain desktop (native Windows, macOS, Linux): `code` on PATH in the window last used,
+    else whatever the system binds to the file's type. An error line, or '' when it opened."""
+    code = shutil.which("code")
+    if code:
+        try:
+            if subprocess.run([code, "-r", absolute], capture_output=True, text=True, timeout=20).returncode == 0:
+                return ""
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        if os.name == "nt":
+            os.startfile(absolute)  # noqa: S606 - the user's own file, opened with its own program
+            return ""
+        opener = shutil.which("open") or shutil.which("xdg-open")
+        if opener and subprocess.run([opener, absolute], capture_output=True, timeout=20).returncode == 0:
+            return ""
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return str(error)
+    return "no editor command found"
 
 
 def live_sockets(preferred):
@@ -96,6 +116,8 @@ def live_sockets(preferred):
     The CLI needs one in VSCODE_IPC_HOOK_CLI; the one this server was started with may belong
     to a window since closed, so every candidate is tried for a connection."""
     paths = []
+    if os.name == "nt" or not hasattr(socket, "AF_UNIX"):
+        return []
     if preferred:
         paths.append(preferred)
     for pattern in ("/mnt/wslg/runtime-dir/vscode-ipc-*.sock", "/run/user/%d/vscode-ipc-*.sock" % os.getuid(),
@@ -557,7 +579,7 @@ class Board:
         return {
             "root": self.root,
             # The project's name in the header: `name` in the configuration, else the folder's.
-            "project": name.strip() if isinstance(name, str) and name.strip() else (os.path.basename(self.root.rstrip("/")) or self.root),
+            "project": name.strip() if isinstance(name, str) and name.strip() else (os.path.basename(self.root.rstrip("/\\")) or self.root),
             "record": record,
             "status": status if isinstance(status, dict) else None,
             "auto": bool((read_json(self.path("auto.json"), {}) or {}).get("on")),
@@ -877,12 +899,12 @@ class Board:
                 return {"ok": False, "error": "outside the project and not a source the record names"}
         if not os.path.exists(absolute):
             return {"ok": False, "error": "not there yet"}
-        code = find_code()
-        if not code:
-            return {"ok": False, "error": "no VS Code command found"}
-        sockets = live_sockets(self.ipc or os.environ.get("VSCODE_IPC_HOOK_CLI"))
-        if not sockets:
-            return {"ok": False, "error": "no VS Code window is reachable"}
+        code = find_remote_code()
+        sockets = live_sockets(self.ipc or os.environ.get("VSCODE_IPC_HOOK_CLI")) if code else []
+        if not code or not sockets:
+            # No remote window to reach: a plain desktop, where `code` or the system opens the file.
+            error = open_locally(absolute)
+            return {"ok": True} if not error else {"ok": False, "error": error}
         last = ""
         for sock in sockets:
             env = dict(os.environ, VSCODE_IPC_HOOK_CLI=sock)
