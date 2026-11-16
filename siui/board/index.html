@@ -2208,7 +2208,8 @@
     else { key = 'idle'; label = 'chat idle · your turn'; }
     const cls = 'agent ' + key, title = (key === 'waiting' ? 'Click: go to the card and its place on the maps' : 'Click: go to the current stage on the map') + (s && s.at ? ' · since ' + new Date(s.at).toLocaleTimeString() : '');
     if (el.className !== cls) el.className = cls;
-    setHtml(el, `<i></i>${esc(label)}${detail ? ` <span class="detail">${esc(detail)}</span>` : ''}`);
+    const model = data.sessionAlive && s && s.model ? String(s.model).replace(/^claude-/, '').replace(/\[.*\]$/, '') : '';
+    setHtml(el, `<i></i>${esc(label)}${detail ? ` <span class="detail">${esc(detail)}</span>` : ''}${model ? ` <span class="detail model" title="The model the chat runs: ${esc(s.model)}">${esc(model)}</span>` : ''}`);
     if (el.title !== title) el.title = title;
   }
   /** The bar's live span: the server out of reach, a page error, the waiting card's jump, or "live"; written only when it changes. */
@@ -2393,7 +2394,7 @@
     const recent = run.isPack ? [] : [...(run.decisions || []).map(d => ({ t: Date.parse(d.at), text: `${d.title} → ${d.answer}`, level: d.level, kind: d.via === 'chat' ? 'chat' : 'card', key: d.level + '/' + d.id, building: !!bld && bld.key === d.level + '/' + d.id && run.world === bld.world })),
       ...eventsOf(run.world).map(ev => ({ t: Date.parse(ev.doneAt || ev.at), text: `${KINDS[ev.kind].name}: ${ev.title}${ev.status === 'done' ? ' · ' + KINDS[ev.kind].done : ''}`, level: ev.level, kind: ev.kind }))]
       .sort((a, b) => b.t - a.t).slice(0, 5);
-    let html = `<h2>Where you are</h2><div class="kv"><span class="k">Chat</span><span>${esc(chat)}</span><span class="k">${esc(Wc('world'))}</span><span>${worldIconHtml(run, 14)} ${isSide(run) ? 'Side quests · by month' : `${esc(run.world)} · ${esc(run.isPack ? run.title : packName(run))} · ${esc(worldWord(run))}`}</span>` +
+    let html = `<h2>Where you are</h2><div class="kv"><span class="k">Chat</span><span>${esc(chat)}</span>${state.sessionAlive && st && st.model ? `<span class="k">Model</span><span>${esc(st.model)}</span>` : ''}<span class="k">${esc(Wc('world'))}</span><span>${worldIconHtml(run, 14)} ${isSide(run) ? 'Side quests · by month' : `${esc(run.world)} · ${esc(run.isPack ? run.title : packName(run))} · ${esc(worldWord(run))}`}</span>` +
       (here ? `<span class="k">${esc(Wc('stage'))}</span><span>${esc(here.level)} ${esc(here.title)} · ${esc(STATUS[stageStatus(here, run)].word)}${here.count ? ` · ${here.decisions.length} of ${here.count}` : ''}</span>` : '') + '</div>';
     if (openEv.length) {
       html += `<h2 style="margin-top:14px">Open on this ${esc(w('world'))} <span class="sub">${openEv.length}</span></h2><ul class="list">` + openEv.slice(0, 6).map(ev => `<li data-go="${esc(ev.level)}" tabindex="0" title="${esc(eventWords(ev))}">${iconHtml(glyphKindOf(ev), 16)} <span>${mdInline(fit(mdPlain(ev.title), 40))}</span><span class="w">${esc(ev.level)}</span></li>`).join('') + (openEv.length > 6 ? `<li class="empty" style="border:0">+${openEv.length - 6} more</li>` : '') + '</ul>';
