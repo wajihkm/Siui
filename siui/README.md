@@ -247,8 +247,14 @@ is for the board and need not be committed.
 A decision also keeps its `cost`: what the session spent, in dollars at API prices, from
 that answer to the next one, read off the session's own ledger at each answered card and
 each turn's end. The board sums it per stage and per world, with each part's share of the
-world in the tooltip. It is counted from the plugin's first reading in a session, by time
-and not by cause, and is absent where the host keeps no ledger.
+world in the tooltip, and the HTML and Markdown exports carry it: a Cost column on the
+cards, a figure on each stage and world, a total under the title. It is counted from the
+plugin's first reading in a session, by time and not by cause, and is absent where the
+host keeps no ledger.
+
+The board also names what the chat runs on: the model beside the chat's state in the
+header, and in the "Where you are" panel a Model row and a Usage row with the session's
+cost so far, how full the context window is, and each rate-limit window with its reset.
 
 ## Configuration
 
