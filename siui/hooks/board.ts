@@ -128,7 +128,19 @@ export async function writeStatus($: EngineInterface, paths: BoardPaths, state: 
     } catch {
       // an engine without the call: the board shows no model
     }
-    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now(), ...(model ? { model } : {}) })}\n`)
+    // What the session has used, as the status line counts it: its cost, the context window, the rate-limit windows.
+    let usage: { usd?: number; context?: number; limits?: Array<{ kind: string; percent: number; resetsAt?: string }> } | undefined
+    try {
+      const used = await $.session.usage()
+      usage = {
+        ...(used.cost ? { usd: Math.round(used.cost.usd * 100) / 100 } : {}),
+        ...(typeof used.context.percent === 'number' ? { context: Math.round(used.context.percent) } : {}),
+        limits: used.rateLimits.map(one => ({ kind: one.kind, percent: Math.round(one.percentUsed), ...(one.resetsAt ? { resetsAt: one.resetsAt } : {}) })),
+      }
+    } catch {
+      // an engine without the call: the board shows no usage
+    }
+    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now(), ...(model ? { model } : {}), ...(usage ? { usage } : {}) })}\n`)
   } catch {
     // the board is a mirror; a missed status costs nothing
   }
