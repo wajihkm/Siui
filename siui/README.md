@@ -244,6 +244,12 @@ and the level current at the time, so the board shows the turns around each step
 2 MB it is archived under a dated name beside it. Both are the project's own; the chat log
 is for the board and need not be committed.
 
+A decision also keeps its `cost`: what the session spent, in dollars at API prices, from
+that answer to the next one, read off the session's own ledger at each answered card and
+each turn's end. The board sums it per stage and per world, with each part's share of the
+world in the tooltip. It is counted from the plugin's first reading in a session, by time
+and not by cause, and is absent where the host keeps no ledger.
+
 ## Configuration
 
 `.claude/siui.json` in the project, every field optional:

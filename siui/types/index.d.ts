@@ -90,6 +90,8 @@ export type GameDecision = {
   started?: true
   /** Work followed the answer in the same turn: built; the board offers no queue for it. */
   built?: true
+  /** What the session spent while this decision was current, in dollars: its card's making excluded, the work after it included. */
+  cost?: number
 }
 
 /**

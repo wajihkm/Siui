@@ -1353,7 +1353,7 @@
       ? `<span class="roadswitch" title="The road on disk; click the other to switch">${['a', 'b'].map(r => `<button class="small${fk.onDisk === r ? ' primary' : ''}" data-road="${r}" data-stage="${esc(baseLevel)}" ${fk.onDisk === r ? 'disabled' : ''}>road ${r}</button>`).join('')}</span>`
       : fk ? `<span class="tag" title="Merged: road ${esc(fk.merged)} kept${fk.tag ? '; the other tagged ' + esc(fk.tag) : ''}">merged ${esc(fk.merged)}</span>`
       : (run.finishedAt == null && !openForkOf(run) && !view.isBoss ? `<button class="small" data-fork="${esc(baseLevel)}" title="Split this stage into roads a and b: a checkpoint, two git branches, the remaining cards asked on each">⑂ Fork</button>` : '');
-    el.innerHTML = `<h2>${esc(Wc('stage'))} <span class="ttl">${esc(view.level)} ${esc(view.title)}</span> ${statusPill(stageStatus(view, run))} ${isWorkingStage ? '<span class="tag working" title="The chat works on this stage now">working</span> ' : ''}${forkTools}${applyButton(run, view)} <span class="sub">${counts.cards} ${esc(ws('card'))} answered${counts.ahead ? `, ${counts.ahead} ahead` : ''}${counts.open ? ` · ${counts.open} open` : ''}${counts.done ? ` · ${counts.done} done` : ''}</span></h2>${svg}`;
+    el.innerHTML = `<h2>${esc(Wc('stage'))} <span class="ttl">${esc(view.level)} ${esc(view.title)}</span> ${statusPill(stageStatus(view, run))} ${isWorkingStage ? '<span class="tag working" title="The chat works on this stage now">working</span> ' : ''}${forkTools}${applyButton(run, view)} <span class="sub">${counts.cards} ${esc(ws('card'))} answered${counts.ahead ? `, ${counts.ahead} ahead` : ''}${counts.open ? ` · ${counts.open} open` : ''}${counts.done ? ` · ${counts.done} done` : ''}${costHtml(costOf(decisions), run, `this ${w('stage')}`)}</span></h2>${svg}`;
     wireApply(el);
     el.querySelectorAll('[data-fork]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Fork the stage ${b.dataset.fork} into roads a and b? A checkpoint is taken first; road a goes on disk.`, { ok: 'Fork' }))) return;
@@ -1588,7 +1588,7 @@
     const isWaiting = run.world === waitingWorld() && run.finishedAt == null;
     const badge = isWaiting ? '<span class="badge waiting"><span class="dot"></span>card waiting</span>' : `<span class="badge">${esc(worldWord(run))}</span>`;
     const abandonBtn = run.finishedAt == null && !isSide(run) ? `<button class="small" data-abandon="${esc(run.world)}" title="Close this ${esc(w('world'))} as abandoned; its answers stay in the record" style="margin-left:auto">⊘ Abandon</button>` : '';
-    el.innerHTML = `<h2>${worldIconHtml(run, 16)} <span class="ttl">${isSide(run) ? 'Side quests · by month' : `${esc(Wc('world'))} ${esc(run.world)} · ${esc(shortPack(run))}`}</span> ${badge} <span class="sub">${(run.decisions || []).length} decisions</span>${abandonBtn}</h2>${svg}${filesBlock(run.decisions || [], `Files touched in this ${w('world')}`, false, run)}${turnsBlock(loose, `Chat outside the ${ws('stage')}`)}`;
+    el.innerHTML = `<h2>${worldIconHtml(run, 16)} <span class="ttl">${isSide(run) ? 'Side quests · by month' : `${esc(Wc('world'))} ${esc(run.world)} · ${esc(shortPack(run))}`}</span> ${badge} <span class="sub">${(run.decisions || []).length} decisions${costHtml(costOf(run.decisions), null, `this ${w('world')}`)}</span>${abandonBtn}</h2>${svg}${filesBlock(run.decisions || [], `Files touched in this ${w('world')}`, false, run)}${turnsBlock(loose, `Chat outside the ${ws('stage')}`)}`;
     wireOpen(el);
     el.querySelectorAll('[data-abandon]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Abandon ${w('world')} ${b.dataset.abandon}? It closes as abandoned; its answers stay in the record.`, { ok: 'Abandon' }))) return;
@@ -1823,7 +1823,7 @@
     const key = d.level + '/' + d.id;
     const isOpen = openDecisions.has(key);
     let html = `<details class="decision" data-key="${esc(key)}" id="d-${esc(key).replace(/[^a-z0-9-]/gi, '_')}"${isOpen ? ' open' : ''}>`;
-    html += `<summary><span class="chev">▶</span><span class="title">${esc(d.title)}${d.via === 'chat' ? '<span class="tag">chat</span>' : ''}${d.via === 'auto' ? '<span class="tag auto" title="Taken by auto-pilot: the recommended option">auto</span>' : ''}${d.via === 'skipped' ? '<span class="tag skipped" title="Dismissed: counted nowhere, comes again">skipped</span>' : ''}${d.queued ? '<span class="tag queued" title="Decided, not started yet">queued</span>' : ''}</span><span class="when">${esc(when(d.at))}</span><button type="button" class="small out" data-output="${esc(d.level)}/${esc(d.id)}" title="Read the chat's output that followed this decision">▤</button><span class="answer">→ <b>${esc(d.answer)}</b>${d.isOther ? ' <span class="when">(your own words)</span>' : ''}</span></summary>`;
+    html += `<summary><span class="chev">▶</span><span class="title">${esc(d.title)}${d.via === 'chat' ? '<span class="tag">chat</span>' : ''}${d.via === 'auto' ? '<span class="tag auto" title="Taken by auto-pilot: the recommended option">auto</span>' : ''}${d.via === 'skipped' ? '<span class="tag skipped" title="Dismissed: counted nowhere, comes again">skipped</span>' : ''}${d.queued ? '<span class="tag queued" title="Decided, not started yet">queued</span>' : ''}</span><span class="when">${esc(when(d.at))}${costHtml(d.cost, runOfDecision(d), 'this decision and the work after it')}</span><button type="button" class="small out" data-output="${esc(d.level)}/${esc(d.id)}" title="Read the chat's output that followed this decision">▤</button><span class="answer">→ <b>${esc(d.answer)}</b>${d.isOther ? ' <span class="when">(your own words)</span>' : ''}</span></summary>`;
     html += '<div class="body">';
     if (d.via !== 'skipped' && d.queued) html += `<div class="tools" style="margin-top:10px"><span class="empty" style="border:0;padding:0">Queued: decided, the work not started.</span><span class="spacer"></span><details class="menu"><summary>▶ Start</summary><div class="items">` +
       `<button type="button" data-start="${esc(d.level)}/${esc(d.id)}" data-title="${esc(d.title)}" data-answer="${esc(d.answer)}" data-notify>Start it<small>out of the queue, and ask the chat to begin now</small></button>` +
@@ -2209,6 +2209,17 @@
     });
     return parts.join(' · ');
   }
+  /** Dollars as the board writes them; a cost under a cent still shows. */
+  const money = n => n < 0.005 ? '<$0.01' : '$' + n.toFixed(2);
+  const costOf = list => (list || []).reduce((sum, d) => sum + (typeof d.cost === 'number' ? d.cost : 0), 0);
+  /** A cost with its share of the world in the tooltip: ` · $1.20`, or '' when nothing was counted. */
+  function costHtml(cost, run, what) {
+    if (!(cost > 0)) return '';
+    const whole = run ? costOf(run.decisions) : 0;
+    const share = whole > 0 && cost < whole ? ` · ${Math.round(100 * cost / whole)}% of this ${w('world')}'s ${money(whole)}` : '';
+    return ` · <span class="cost" title="What the session spent on ${esc(what)}, at API prices${esc(share)}">${money(cost)}</span>`;
+  }
+  const runOfDecision = d => ((state && state.record && state.record.runs) || []).find(r => (r.decisions || []).includes(d));
   function renderAgent(data) {
     const el = $('agent');
     const s = data.status || null;
