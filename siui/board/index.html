@@ -1587,9 +1587,24 @@
     const loose = chatTurns(run, '');
     const isWaiting = run.world === waitingWorld() && run.finishedAt == null;
     const badge = isWaiting ? '<span class="badge waiting"><span class="dot"></span>card waiting</span>' : `<span class="badge">${esc(worldWord(run))}</span>`;
-    const abandonBtn = run.finishedAt == null && !isSide(run) ? `<button class="small" data-abandon="${esc(run.world)}" title="Close this ${esc(w('world'))} as abandoned; its answers stay in the record" style="margin-left:auto">⊘ Abandon</button>` : '';
-    el.innerHTML = `<h2>${worldIconHtml(run, 16)} <span class="ttl">${isSide(run) ? 'Side quests · by month' : `${esc(Wc('world'))} ${esc(run.world)} · ${esc(shortPack(run))}`}</span> ${badge} <span class="sub">${(run.decisions || []).length} decisions${costHtml(costOf(run.decisions), null, `this ${w('world')}`)}</span>${abandonBtn}</h2>${svg}${filesBlock(run.decisions || [], `Files touched in this ${w('world')}`, false, run)}${turnsBlock(loose, `Chat outside the ${ws('stage')}`)}`;
+    // An open world with no card waiting and a chat that is not at work: nothing drives it, so the page offers to.
+    const answeredHere = (run.decisions || []).filter(d => d.via !== 'chat' && d.via !== 'skipped').length;
+    const chatBusy = !!(state.status && state.status.state === 'working' && state.sessionAlive);
+    const goBtn = run.finishedAt == null && !isSide(run) && !isWaiting && !chatBusy
+      ? `<button class="small primary" data-go="${esc(run.world)}" title="Ask the chat to ${answeredHere ? 'present the next card of' : 'start'} this ${esc(w('world'))}" style="margin-left:auto">${answeredHere ? '⏵ Continue' : `⏵ Start this ${esc(w('world'))}`}</button>` : '';
+    const abandonBtn = run.finishedAt == null && !isSide(run) ? `<button class="small" data-abandon="${esc(run.world)}" title="Close this ${esc(w('world'))} as abandoned; its answers stay in the record"${goBtn ? '' : ' style="margin-left:auto"'}>⊘ Abandon</button>` : '';
+    el.innerHTML = `<h2>${worldIconHtml(run, 16)} <span class="ttl">${isSide(run) ? 'Side quests · by month' : `${esc(Wc('world'))} ${esc(run.world)} · ${esc(shortPack(run))}`}</span> ${badge} <span class="sub">${(run.decisions || []).length} decisions${costHtml(costOf(run.decisions), null, `this ${w('world')}`)}</span>${goBtn}${abandonBtn}</h2>${svg}${filesBlock(run.decisions || [], `Files touched in this ${w('world')}`, false, run)}${turnsBlock(loose, `Chat outside the ${ws('stage')}`)}`;
     wireOpen(el);
+    const go = el.querySelector('[data-go]');
+    if (go) go.addEventListener('click', async () => {
+      const hasPack = run.pack && run.pack !== 'ad-hoc';
+      const text = answeredHere
+        ? `Go on with world ${run.world}${hasPack ? ` (pack ${run.pack})` : ''}: present its next card, with world ${run.world} on it and no text before it.`
+        : hasPack
+          ? `Start the pack ${run.pack} as world ${run.world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${run.pack}" and world ${run.world} on every card. No text before the card.`
+          : `Start world ${run.world}: present its first card, with world ${run.world} on every card and no text before it.`;
+      if (await post('/prompt', { text })) toast(answeredHere ? 'Asked the chat to go on' : 'Asked the chat to start it');
+    });
     el.querySelectorAll('[data-abandon]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Abandon ${w('world')} ${b.dataset.abandon}? It closes as abandoned; its answers stay in the record.`, { ok: 'Abandon' }))) return;
       if (await post('/abandon', { world: Number(b.dataset.abandon) })) { toast('Abandoned'); render(true); }
@@ -2483,7 +2498,7 @@
     const events = allEvents(), bld = building(), view = run ? overview(run).find(v => v.level === selected) : null;
     const common = [U.name, fontK, innerWidth($('map')), lessMotion()];
     if (changed('roadmap', [common, runs, state.packs, events, selectedRun, waitingWorld(), bld])) renderRoadmap();
-    if (changed('map', [common, run, events, card, answered, bld, selected, state.files, run ? chatTurns(run, '') : null])) renderMap(run);
+    if (changed('map', [common, run, events, card, answered, bld, selected, state.status && state.status.state, state.sessionAlive, state.files, run ? chatTurns(run, '') : null])) renderMap(run);
     if (changed('stage', [common, run, view ? view.level : '', events, card, answered, bld, state.config && state.config.extended])) renderStage(run, view);
     const active = document.activeElement;
     if (!(active && active.id === 'sendText') && changed('now', [common, run, selected, state.status, state.sessionAlive, card, answered, events, bld])) renderNow(run);
