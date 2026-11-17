@@ -121,6 +121,12 @@ export async function countdownOnBoard(
   return undefined
 }
 
+/** Whether game mode is on, as the hooks last said: the board shows Off or On by it. */
+let modeOn = false
+export function setMode(on: boolean): void {
+  modeOn = on
+}
+
 /** Tells the board what the chat is doing; a tool's name or a card's title as the detail. */
 export async function writeStatus($: EngineInterface, paths: BoardPaths, state: ChatStatus, detail = ''): Promise<void> {
   try {
@@ -143,7 +149,7 @@ export async function writeStatus($: EngineInterface, paths: BoardPaths, state: 
     } catch {
       // an engine without the call: the board shows no usage
     }
-    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now(), ...(model ? { model } : {}), ...(usage ? { usage } : {}) })}\n`)
+    await $.fs.write(paths.status, `${JSON.stringify({ state, detail, at: Date.now(), mode: modeOn ? 'on' : 'off', ...(model ? { model } : {}), ...(usage ? { usage } : {}) })}\n`)
   } catch {
     // the board is a mirror; a missed status costs nothing
   }

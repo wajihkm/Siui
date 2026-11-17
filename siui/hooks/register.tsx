@@ -26,6 +26,7 @@ import {
   setAuto,
   waitOnBoard,
   writeStatus,
+  setMode,
 } from './board'
 import { drawCard } from './card'
 import { appendChat } from './chat'
@@ -34,7 +35,7 @@ import type { RunFork } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
 import { setWords } from './words'
-import { homeOf } from './paths'
+import { homeOf, launch } from './paths'
 import { claimPending, resetCost, setCostTarget, settleCost } from './cost'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
@@ -217,6 +218,10 @@ let pendingUser = ''
 let ownAsk = false
 /** Whether this turn ran a tool that does work (an edit, a command), not just a read or a siui tool. */
 let turnHadWork = false
+/** The main loop's running turn, for `/siui off` to end while a card waits. */
+let heldTurn: string | undefined
+/** Set by `/siui off` while a card waits: the card ends as switched off, not as skipped. */
+let offRequested = false
 /** The subagents seen at work lately, by id, with the time of their last tool call: the board says they run. */
 const liveAgents = new Map<string, number>()
 const AGENT_QUIET_MS = 120_000
@@ -257,12 +262,74 @@ async function openBoard($: EngineInterface, root: string): Promise<string> {
     : `Board at ${url}; open it in a browser. Cards are answered there while the page is open.`
 }
 
+/**
+ * Leaves game mode. A card still waiting, on the board or in the chat's dialog, is let go first: the board's
+ * wait is answered with a dismissal, the card leaves the page, and the turn that asked it is ended.
+ */
+async function switchOff($: EngineInterface, root: string): Promise<void> {
+  const waiting = await read($, card)
+  await $.store.set(storeKey(root), false)
+  await update($, isOn, () => false)
+  setMode(false)
+  if (waiting) {
+    offRequested = true
+    try {
+      const paths = await boardPaths($, root)
+      await $.fs.write(`${paths.run}/inbox-answer.json`, `${JSON.stringify({ id: waiting.id, answer: '', dismiss: true, at: Date.now() / 1000 })}\n`)
+      await publishCard($, paths, null)
+      await writeStatus($, paths, 'idle')
+    } catch {
+      // no board folder: only the chat's dialog holds the card
+    }
+    if (heldTurn !== undefined) {
+      try {
+        await $.turn.abort({ turnId: heldTurn })
+      } catch {
+        // the turn ended meanwhile
+      }
+    }
+  }
+  await update($, card, () => null)
+  $.ui.invalidate('tool.describe')
+  $.ui.status(undefined)
+  if (!waiting) {
+    try {
+      await writeStatus($, await boardPaths($, root), 'idle')
+    } catch {
+      // the board is a mirror
+    }
+  }
+}
+
+/** Turns game mode on from the board's button: the mode only; the person speaks next, or presses Continue. */
+async function switchOn($: EngineInterface, root: string): Promise<void> {
+  await $.store.set(storeKey(root), true)
+  await update($, isOn, () => true)
+  setMode(true)
+  $.ui.invalidate('tool.describe')
+  await writeStatus($, await boardPaths($, root), 'idle')
+}
+
 function startBoardTimers($: EngineInterface, paths: BoardPaths): void {
   if (stopBoardTimers) return
   const beat = $.clock.every(30_000, () => {
     void $.fs.write(paths.heartbeat, String(Date.now()))
   })
   const drain = $.clock.every(2_000, () => {
+    // The board's Off button leaves a mark in the run folder: a slash command typed while a card waits is
+    // held until the turn ends, a timer is not.
+    void $.fs.exists(`${paths.run}/off`).then(async asked => {
+      if (!asked) return
+      await launch($, ['remove', `${paths.run}/off`])
+      await switchOff($, await $.session.root())
+      $.ui.toast('Game mode off, from the board')
+    }).catch(() => undefined)
+    void $.fs.exists(`${paths.run}/on`).then(async asked => {
+      if (!asked) return
+      await launch($, ['remove', `${paths.run}/on`])
+      await switchOn($, await $.session.root())
+      $.ui.toast('Game mode on, from the board')
+    }).catch(() => undefined)
     void drainPrompts($, paths).then(prompts => {
       for (const text of prompts) void $.prompt.submit({ text, asUser: true })
     })
@@ -301,7 +368,9 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     }
     await $.store.set(storeKey(root), true)
     await update($, isOn, () => true)
+    setMode(true)
     $.ui.invalidate('tool.describe')
+    await writeStatus($, await boardPaths($, root), 'working', 'thinking')
     void $.prompt.submit({ text: startPrompt(pack, packPath) })
 
     return { text: pack ? `Game mode on, pack ${pack}. The first card is coming.` : 'Game mode on. Describe the task.' }
@@ -321,11 +390,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
   }
 
   if (word === 'off') {
-    await $.store.set(storeKey(root), false)
-    await update($, isOn, () => false)
-    await update($, card, () => null)
-    $.ui.invalidate('tool.describe')
-    $.ui.status(undefined)
+    await switchOff($, root)
 
     return { text: 'Game mode off.' }
   }
@@ -518,6 +583,7 @@ export const register: Register = on => {
     setWords(config.words)
     const wasOn = (await $.store.get(storeKey(root))) === true
     await update($, isOn, () => wasOn)
+    setMode(wasOn)
     if (wasOn) $.ui.invalidate('tool.describe')
     // A card left over from an interrupted turn (the start runs again after a reload) would let
     // AskUserQuestion through the guard: no card is up when a start runs.
@@ -540,6 +606,7 @@ export const register: Register = on => {
   // What the chat is doing, for the board's header: working through a turn
   // and its tools, idle between turns, waiting on a card, or ended.
   on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) heldTurn = e.turnId
     if (e.agentId === undefined) await writeStatus($, await boardPaths($, await $.session.root()), 'working', 'thinking')
 
     return next(e)
@@ -641,6 +708,8 @@ export const register: Register = on => {
         }
       }
       turnHadWork = false
+      heldTurn = undefined
+      offRequested = false
       // The turn's cost goes to the decision that was current.
       try {
         const costs = await readRecord($, root, config.record)
@@ -926,6 +995,15 @@ export const register: Register = on => {
         await update($, card, () => null)
         await publishCard($, paths, null)
         $.ui.status(undefined)
+        // `/siui off` let the card go: it is not a skipped card, the mode simply ended.
+        if (offRequested) {
+          offRequested = false
+
+          return {
+            result: JSON.stringify({ id: current.id, level: current.level, dismissed: true, off: true }),
+            context: ['The user turned game mode off while this card waited. End the turn with one short line; ask nothing more.'],
+          }
+        }
         if (current.kind === 'decision') {
           const record = await readRecord($, root, config.record)
           const at = new Date().toISOString()

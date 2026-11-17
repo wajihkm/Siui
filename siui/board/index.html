@@ -468,6 +468,8 @@
   <span class="readywrap" id="readyWrap" hidden><button class="small" id="readyBtn" type="button" title="The last thing built: select it on the maps and read the chat's output">✔ <span class="t"></span></button><button class="small x" id="readyClose" type="button" title="Dismiss this notice">×</button></span>
   <span class="spacer"></span>
   <button class="small icon" id="chatFirstBtn" type="button" title="Cards in the chat: answer cards in the chat dialog even while this page is open; the page only mirrors them">⌨</button>
+  <button class="small icon" id="offBtn" type="button" hidden title="Game mode off: lets a waiting card go, ends the chat's turn and leaves the mode">⏻</button>
+  <button class="small" id="onBtn" type="button" hidden title="Game mode is off: the chat asks through plain text. Turn it on, then speak in the chat or press Continue on a world">⏵ game on</button>
   <button class="small" id="autoBtn" type="button" title="Auto-pilot: a card with a recommendation is answered with it after an eight-second countdown; a boss, a bug, a problem or a card without advice waits for you">⏵ auto</button>
   <button class="small icon" id="soundBtn" type="button" title="A short chime when a card waits; click to switch"></button>
   <button class="small icon" id="schemeBtn" type="button" title="Light, dark, or follow the system">◐</button>
@@ -2210,6 +2212,17 @@
     if (b.classList.contains('on') !== !!on) b.classList.toggle('on', !!on);
     if (b.textContent !== text) b.textContent = text;
   }
+  /** Off shows while the mode is on, On while it is off; neither when the chat is not running or says nothing of its mode. */
+  function renderModeBtns(data) {
+    const mode = data.sessionAlive && data.status ? data.status.mode : undefined;
+    if ($('offBtn').hidden !== (mode !== 'on')) $('offBtn').hidden = mode !== 'on';
+    if ($('onBtn').hidden !== (mode !== 'off')) $('onBtn').hidden = mode !== 'off';
+  }
+  $('onBtn').addEventListener('click', async () => { if (await post('/on', {})) toast('Asked the chat to turn game mode on'); });
+  $('offBtn').addEventListener('click', async () => {
+    if (!(await ask('Turn game mode off? A waiting card is let go and the chat stops; /siui on brings the mode back.', { ok: 'Turn it off' }))) return;
+    if (await post('/off', {})) toast('Asked the chat to leave game mode');
+  });
   $('autoBtn').addEventListener('click', async () => { const on = !$('autoBtn').classList.contains('on'); if (await post('/auto', { on })) { renderAutoBtn(on); toast(on ? 'Auto-pilot on' : 'Auto-pilot off'); } });
 
   $('agent').addEventListener('click', () => {
@@ -2254,7 +2267,7 @@
     else if (s.state === 'working') { key = 'working'; label = 'working'; detail = s.detail && s.detail !== 'thinking' ? s.detail : (s.detail === 'thinking' ? 'thinking' : ''); }
     else if (s.state === 'ended') { key = 'ended'; label = 'chat ended'; }
     else if (s.state === 'waiting') { key = 'waiting'; label = 'waiting for you'; }
-    else { key = 'idle'; label = 'chat idle · your turn'; }
+    else { key = 'idle'; label = s.mode === 'off' ? 'chat idle · game off' : 'chat idle · your turn'; }
     const cls = 'agent ' + key, title = (key === 'waiting' ? 'Click: go to the card and its place on the maps' : 'Click: go to the current stage on the map') + (s && s.at ? ' · since ' + new Date(s.at).toLocaleTimeString() : '');
     if (el.className !== cls) el.className = cls;
     const model = data.sessionAlive && s && s.model ? String(s.model).replace(/^claude-/, '').replace(/\[.*\]$/, '') : '';
@@ -2522,6 +2535,7 @@
     renderAgent(data);
     renderAutoBtn(data.auto);
     renderChatFirstBtn(data.chatFirst);
+    renderModeBtns(data);
     const json = JSON.stringify(data);
     if (json !== lastJson) {
       state = data; applyTheme(); applyScheme();
@@ -2552,7 +2566,7 @@
         const status = head.status || null, alive = !!head.alive;
         if (JSON.stringify(status) !== JSON.stringify(state.status || null) || alive !== !!state.sessionAlive) {
           state.status = status; state.sessionAlive = alive;
-          renderAgent(state); trackReady(state);
+          renderAgent(state); trackReady(state); renderModeBtns(state);
           try { render(false); } catch (e) { console.error(e); }
         }
       }

@@ -865,6 +865,17 @@ class Board:
         self.prompt({"text": f"Present the card {dropped.get('level', '')}/{dropped.get('id', '')} ({dropped.get('title', '')}) again, with no text before it."})
         return {"ok": True, "level": dropped.get("level"), "id": dropped.get("id")}
 
+    def off(self, body):
+        """The page's Off button: leaves a mark the plugin's timer acts on within two seconds (it lets a waiting card
+        go, ends its turn and leaves game mode). Typed in the chat, /siui off waits for the turn a card holds open."""
+        touch(self.path("off"))
+        return {"ok": True}
+
+    def on(self, body):
+        """The page's On button: a mark the plugin's timer acts on; it turns game mode on and waits for the person."""
+        touch(self.path("on"))
+        return {"ok": True}
+
     def auto(self, body):
         """Auto-pilot's switch, shared with the plugin through one file in the run folder."""
         on = bool(body.get("on"))
@@ -1027,6 +1038,8 @@ def make_handler(board):
                 "/checkpoint": board.checkpoint,
                 "/back": board.back,
                 "/auto": board.auto,
+                "/off": board.off,
+                "/on": board.on,
                 "/chatfirst": board.chat_first,
                 "/revert": board.revert,
                 "/open": board.open_file,
@@ -1049,6 +1062,46 @@ def make_handler(board):
                 self.send_json({"ok": False, "error": f"{type(error).__name__}: {error}"}, 500)
 
     return Handler
+
+
+def code_stamp():
+    """The change mark of this program's own file; 0 when it cannot be read."""
+    try:
+        return os.stat(os.path.abspath(__file__)).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def code_stamp_after(seconds):
+    """The stamp once more after a pause: a file still being written keeps moving, a finished one does not."""
+    time.sleep(seconds)
+    return code_stamp()
+
+
+def restart_self(server, board, port):
+    """Frees the port, starts this program again through the launcher with the same arguments and the port it
+    holds, and exits; when the launcher is not there or fails, goes on serving as it is."""
+    launcher = os.path.join(HERE, "launch.py")
+    if not os.path.exists(launcher):
+        return
+    args = list(sys.argv[1:])
+    if "--port" in args and args.index("--port") + 1 < len(args):
+        args[args.index("--port") + 1] = str(port)
+    else:
+        args += ["--port", str(port)]
+    print(f"the server's code changed; restarting on port {port}", file=sys.stderr, flush=True)
+    try:
+        os.remove(board.path("server.json"))
+    except OSError:
+        pass
+    try:
+        server.socket.close()
+    except OSError:
+        pass
+    try:
+        subprocess.run([sys.executable, "-I", launcher, "start", *args], timeout=30)
+    finally:
+        os._exit(0)
 
 
 def port_answers(port):
@@ -1108,6 +1161,8 @@ def main():
             pass
     write_json(board.path("server.json"), {"pid": os.getpid(), "port": port, "startedAt": board.started})
 
+    code_at_start = code_stamp()
+
     def watchdog():
         while True:
             time.sleep(5)
@@ -1117,6 +1172,12 @@ def main():
                 except OSError:
                     pass
                 os._exit(0)
+            # The page is read from disk on every load, this program once: when its own file changed (an update of
+            # the plugin, an edit while developing), a page newer than its server would meet routes that are not
+            # there. So the server starts its successor on the same port and leaves.
+            now = code_stamp()
+            if now != code_at_start and now == code_stamp_after(1.0):
+                restart_self(server, board, port)
 
     threading.Thread(target=watchdog, daemon=True).start()
     server.serve_forever()
