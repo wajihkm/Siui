@@ -40,8 +40,8 @@ every command, the board, the universes, the record and the configuration.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
 - Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
-  one Python launcher. Built and used daily on Linux and WSL; on Windows the launcher and
-  the server are proven by script, a full session less so yet.
+  one Python launcher. Built and used daily on WSL in VS Code, and run in full sessions in
+  the Claude desktop app on Windows and on a second WSL machine; macOS is untried.
 
 ## What makes it different
 
@@ -78,6 +78,7 @@ plugin's `scaffold` or your own.
 | Part | Where |
 |---|---|
 | The plugin | [siui/](siui/README.md) |
+| Why, benefits and features | [FEATURES.md](FEATURES.md) |
 | The skill | [skills/decision-cards/SKILL.md](skills/decision-cards/SKILL.md) |
 | The pack format | [skills/decision-cards/packs/README.md](skills/decision-cards/packs/README.md) |
 | The bundled pack | [siui/packs/scaffold.md](siui/packs/scaffold.md) |

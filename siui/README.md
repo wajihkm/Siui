@@ -36,8 +36,8 @@ there opens the explanation. The record grows in `.claude/decisions.json`.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
 - Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
-  one Python launcher. Built and used daily on Linux and WSL; on Windows the launcher and
-  the server are proven by script, a full session less so yet.
+  one Python launcher. Built and used daily on WSL in VS Code, and run in full sessions in
+  the Claude desktop app on Windows and on a second WSL machine; macOS is untried.
 
 ## The commands
 
