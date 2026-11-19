@@ -78,6 +78,7 @@ plugin's `scaffold` or your own.
 | Part | Where |
 |---|---|
 | The plugin | [siui/](siui/README.md) |
+| Siui and GitHub Spec Kit | [SPEC-KIT.md](SPEC-KIT.md) |
 | Why, benefits and features | [FEATURES.md](FEATURES.md) |
 | The skill | [skills/decision-cards/SKILL.md](skills/decision-cards/SKILL.md) |
 | The pack format | [skills/decision-cards/packs/README.md](skills/decision-cards/packs/README.md) |
