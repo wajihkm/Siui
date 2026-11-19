@@ -491,6 +491,7 @@
     <h3 class="nwtitle" style="margin:0 0 10px;font-size:16px">New world</h3>
     <label class="nwlabel">Title<input type="text" name="title" placeholder="release, onboarding, performance…" autocomplete="off" required maxlength="60"></label>
     <label class="nwlabel">What it is about<textarea name="about" placeholder="One or two lines: the goal, what must be decided, what is fixed" maxlength="400"></textarea></label>
+    <label class="nwlabel nwmethod" hidden>Method<select name="method"></select><span class="g">how the world runs: a method's stages are the same for every world started with it</span></label>
     <div class="nwhow">
       <label><input type="radio" name="how" value="pack" checked> <b>Write a pack first</b><span class="g">the chat writes the levels and cards, then starts them; the pack stays for later</span></label>
       <label><input type="radio" name="how" value="adhoc"> <b>Ad hoc, start now</b><span class="g">levels made on the fly from what you describe; nothing planned ahead on the map</span></label>
@@ -515,7 +516,19 @@
   /** A run's pack name; a run without one is ad hoc. */
   const packName = run => (run && typeof run.pack === 'string' && run.pack) || 'ad-hoc';
   /** The pack name without its "world-N-" prefix, for a title. */
-  const shortPack = run => packName(run).replace(/^world-\d+-/, '');
+  const shortPack = run => (run && typeof run.title === 'string' && run.title) || packName(run).replace(/^world-\d+-/, '');
+  /** The methods a new world can run: packs that say `kind:` method, the project's own first. */
+  const methods = () => ((state && state.packs) || []).filter(p => p.kind === 'method');
+  /** The project's facts: the answers of the setup world, standing for every later one. */
+  function projectFacts() {
+    const out = [];
+    ((state && state.record && state.record.runs) || []).forEach(r => {
+      if ((r.facts !== true && r.pack !== 'scaffold') || r.abandonedAt) return;
+      (r.decisions || []).forEach(d => { if (d.via !== 'skipped' && !d.queued) out.push(d); });
+    });
+    return out;
+  }
+  const factsHtml = () => { const f = projectFacts(); return f.length ? `<details class="fold facts"><summary>Project facts (${f.length}) <span class="g">decided once; no later ${esc(w('world'))} asks them again</span></summary><div class="kv">${f.map(d => `<span class="k">${esc(d.title)}</span><span>${esc(d.answer)}</span>`).join('')}</div></details>` : ''; };
   /** A decision's or a card's sources that name a file: anything without a string path is skipped. */
   const sourcesOf = list => (Array.isArray(list) ? list : []).filter(s => s && typeof s.path === 'string' && s.path);
   /** Writes an element's HTML only when it changed, so nothing restarts for the same content; true when it wrote. */
@@ -651,7 +664,8 @@
     const runs = record && record.runs ? record.runs : [];
     const used = new Set(runs.map(r => r.pack));
     const next = runs.reduce((m, r) => Math.max(m, r.world), 0) + 1;
-    return ((state && state.packs) || []).filter(p => !used.has(p.name) && !p.hidden).map((p, i) => ({
+    const hasWorld = runs.some(r => !isSide(r));
+    return ((state && state.packs) || []).filter(p => !used.has(p.name) && !p.hidden && p.kind !== 'method' && !(p.source === 'plugin' && hasWorld)).map((p, i) => ({
       id: 'pack:' + p.name, isPack: true, pack: p.name, title: p.title, world: p.world || next + i,
       finishedAt: null, levels: {}, plan: p.levels, decisions: [], path: p.path, source: p.source,
     }));
@@ -1193,7 +1207,7 @@
     svg += '</svg>';
     const sideOpen = side ? eventsOf(0).filter(ev => ev.status === 'open' && ev.kind !== 'checkpoint').length : 0;
     const sideBadge = side ? `<button class="sidequests${shown && shown.id === side.id ? ' selected' : ''}" data-run="${esc(side.id)}" type="button" title="Side quests: decisions after a boss that belong to no stage, kept by month · ${(side.decisions || []).length} decisions${sideOpen ? ` · ${sideOpen} open on the map` : ''}. Click to show it."><span class="disc">${iconHtml('side', 28)}${sideOpen ? `<span class="bubble">${sideOpen}</span>` : ''}</span><span class="lbl">Side quests</span></button>` : '';
-    el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span>${hiddenPacksHtml()}<button class="small" data-new>+ New ${esc(w('world'))}</button></h2>` + svg + (sideBadge ? `<div class="roadfoot">${sideBadge}</div>` : '');
+    el.innerHTML = `<h2>${esc(Wc('roadmap'))} <span class="spacer"></span>${hiddenPacksHtml()}<button class="small" data-new>+ New ${esc(w('world'))}</button></h2>` + svg + factsHtml() + (sideBadge ? `<div class="roadfoot">${sideBadge}</div>` : '');
     el.querySelectorAll('.sidequests[data-run], .tile[data-run]').forEach(b => b.addEventListener('click', () => { selectRun(b.dataset.run); render(true); }));
     el.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => openNewWorld(nextWorld)));
     wireUnhide(el);
@@ -1209,6 +1223,11 @@
     d.querySelector('input[name=title]').value = '';
     d.querySelector('textarea[name=about]').value = '';
     d.querySelector('input[name=how][value=pack]').checked = true;
+    const ms = methods(), sel = d.querySelector('select[name=method]');
+    sel.innerHTML = '<option value="">Plain: levels written for this one</option>' + ms.map(m => `<option value="${esc(m.name)}">${esc(m.title)}</option>`).join('');
+    d.querySelector('.nwmethod').hidden = ms.length === 0;
+    d.querySelector('.nwhow').hidden = false;
+    sel.onchange = () => { d.querySelector('.nwhow').hidden = sel.value !== ''; };
     d.showModal();
     d.querySelector('input[name=title]').focus();
   }
@@ -1221,10 +1240,13 @@
     const n = Math.max(0, ...runs.map(r => r.world), ...pendingPacks(state && state.record).map(p => p.world || 0)) + 1;
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'world';
     const name = `world-${n}-${slug}`;
-    const text = how === 'pack'
+    const method = methods().find(m => m.name === f.method.value);
+    const text = method
+      ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${method.name}: read the pack at ${method.path} and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${method.name}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
+      : how === 'pack'
       ? `Create world ${n}: write the pack ${name} in this project's .claude/skills/decision-cards/packs/, titled "${title}", about: ${about || title}. Follow the README.md of that packs folder: a fixed-facts list, three levels of three to four cards with ids, titles and options (the recommended first), a boss level last, and the inputs and outputs per level. Then start it as world ${n}: load the skill decision-cards, read the pack and the first level's inputs, and present its fixed-facts card with pack "${name}" and world ${n} on every card. No text before the card.`
       : `Start an ad-hoc world ${n} titled "${title}" about: ${about || title}. Turn it into levels of three to four cards with a boss last, and present the first card with world ${n} on every card. No text before the card.`;
-    if (await post('/prompt', { text })) { $('newworld').close(); toast(how === 'pack' ? `Asked the chat to write and start world ${n}` : `Asked the chat to start world ${n}`); }
+    if (await post('/prompt', { text })) { $('newworld').close(); toast(how === 'pack' && !method ? `Asked the chat to write and start world ${n}` : `Asked the chat to start world ${n}`); }
   });
 
   /**

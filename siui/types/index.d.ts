@@ -35,6 +35,8 @@ export type GameCard = {
   world: number
   /** The pack the world runs, when the model names it. */
   pack?: string
+  /** The world's own title, when its first card opens it with a method. */
+  worldTitle?: string
   /** What this card carries onto the map: it was raised by a discovery, a requirement or a check. */
   mark?: 'bug' | 'feature' | 'problem' | 'check'
   level: string

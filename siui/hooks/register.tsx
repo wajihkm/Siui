@@ -40,7 +40,7 @@ import { claimPending, resetCost, setCostTarget, settleCost } from './cost'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
 import { mapSvg } from './map'
-import { findPack, readPlan } from './pack'
+import { findPack, readPackMeta, readPlan, renumberPlan } from './pack'
 import {
   ASK_REPLACED,
   DONE_DESCRIPTION,
@@ -74,6 +74,7 @@ import {
   targetOf,
   timeSuffix,
   writeRecord,
+  projectFacts,
 } from './record'
 import type { GameRecord, Routed } from './record'
 import { resolveSources, skillPaths } from './sources'
@@ -310,6 +311,19 @@ async function switchOn($: EngineInterface, root: string): Promise<void> {
   await writeStatus($, await boardPaths($, root), 'idle')
 }
 
+/** The project's facts as a line of the protocol: what stands decided, so no card asks it again. */
+async function factsText($: EngineInterface): Promise<string> {
+  try {
+    const facts = projectFacts(await readRecord($, await $.session.root(), config.record))
+    if (facts.length === 0) return ''
+    const list = facts.slice(0, 40).map(one => `${one.id}=${cut(one.answer, 70)}`).join('; ')
+
+    return ` (15) PROJECT FACTS, decided once in the setup world and standing for every world: ${list}. Never ask one of these again: a card a pack lists whose answer stands here is skipped, and what follows from it is built on the fact. A user who wants one changed says so; then ask that one card, with world and level of the setup world.`
+  } catch {
+    return ''
+  }
+}
+
 function startBoardTimers($: EngineInterface, paths: BoardPaths): void {
   if (stopBoardTimers) return
   const beat = $.clock.every(30_000, () => {
@@ -363,7 +377,8 @@ async function runCommand($: EngineInterface, e: { args: string }) {
       const run = ensureRun(record, targetOf(root), pack, nextWorld, new Date().toISOString())
       const plan = await readPlan($, pack, root, config.packs)
       packPath = await findPack($, pack, root, config.packs)
-      if (plan.length > 0) run.plan = plan
+      if (plan.length > 0) run.plan = renumberPlan(plan, run.world)
+      if ((await readPackMeta($, pack, root, config.packs)).isFacts) run.facts = true
       await writeRecord($, root, record, config.record)
     }
     await $.store.set(storeKey(root), true)
@@ -924,7 +939,7 @@ export const register: Register = on => {
     return {
       sections: [
         ...made.sections.filter(section => section.id !== SECTION_ID),
-        { id: SECTION_ID, text: PROTOCOL_SECTION, scope: 'session' },
+        { id: SECTION_ID, text: PROTOCOL_SECTION + (await factsText($)), scope: 'session' },
       ],
     }
   })
@@ -1104,10 +1119,13 @@ export const register: Register = on => {
         })
       }
       if (isNewWorld && current.pack && run.plan === undefined) {
-        // The first card of a new world names its pack: the run takes the plan.
+        // The first card of a new world names its pack: the run takes the plan, numbered for this world,
+        // the world's own title when it runs a method, and the facts flag when the pack holds project facts.
         const plan = await readPlan($, current.pack, root, config.packs)
-        if (plan.length > 0) run.plan = plan
+        if (plan.length > 0) run.plan = renumberPlan(plan, run.world)
+        if ((await readPackMeta($, current.pack, root, config.packs)).isFacts) run.facts = true
       }
+      if (isNewWorld && current.worldTitle) run.title = current.worldTitle
       // What was spent up to this answer belongs to the decision before; from here on, to this one.
       await settleCost($, record)
       const hadCost = run.decisions.find(one => one.level === decision.level && one.id === decision.id)?.cost ?? 0

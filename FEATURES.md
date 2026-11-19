@@ -111,6 +111,11 @@ files, the chat around it and the cost.
 - A world is one piece of work; its stages hold three or four cards; the last is the boss.
 - A pack is a markdown file that lays a world out in advance. One ships with the plugin,
   `scaffold`, which sets up a new project; a project writes its own.
+- A method is a pack that says how any world runs. One ships, `spec-driven`: a feature is
+  specified, clarified, planned and cut into tasks on cards, then written up and built by
+  the boss. Every feature becomes a world with the same stages.
+- Project facts: the answers of the setup world stand for every later world, are listed on
+  the board, and are never asked twice.
 - A world without a pack: describe the task and the assistant turns it into stages.
 - Side quests: decisions that belong to no world, kept by month.
 - A world can be abandoned and stays readable.

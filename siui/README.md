@@ -170,7 +170,21 @@ and quality of a new project, then the boss creates the files decided.
 `.claude/skills/decision-cards/packs/`, the folders the configuration names under `packs`
 (relative to the project, or absolute), the plugin's `packs/`, then
 `~/.claude/skills/decision-cards/packs/`. The number in a pack's name is a suggestion; a
-run takes the project's next world number.
+run takes the project's next world number, and its plan's levels are numbered with it.
+
+A pack is one of two kinds, said in its opening lines:
+
+- A **plan** lays out one piece of work. On the roadmap it waits as a planned world until
+  it is run. A plan that says `` `facts:` project `` holds the project's facts: its answers
+  are decided once, listed under the roadmap, given to the model with the rules, and no
+  later world asks them again. `scaffold` is such a plan. A bundled plan shows as a
+  planned world only while the project has no world yet.
+- A **method**, marked `` `kind:` method ``, is a way any world runs, not a piece of work.
+  It never shows as a planned world; the New world dialog offers it, and a world started
+  with it carries its own title while its stages are the method's. The plugin ships one,
+  [packs/spec-driven.md](packs/spec-driven.md): a feature is specified, clarified,
+  planned and cut into tasks on cards, then the boss writes `spec.md`, `plan.md` and
+  `tasks.md` under `specs/<feature>/` and builds the tasks. One feature, one world.
 
 ## The universes
 

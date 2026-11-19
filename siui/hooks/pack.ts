@@ -46,6 +46,34 @@ export function parsePack(text: string): PlanLevel[] {
   return plan
 }
 
+/** What a pack says of itself in its opening lines: `kind:` method, `facts:` project. */
+export type PackMeta = { isMethod: boolean; isFacts: boolean }
+
+/**
+ * A method is a way any world runs (its levels are the stages of every world started with it), not a piece of
+ * work: it never shows on the roadmap as a planned world. A pack of project facts is decided once: its answers
+ * stand for every later world, which never asks them again.
+ */
+export function packMeta(text: string): PackMeta {
+  return { isMethod: /`kind:`\s*method\b/i.test(text), isFacts: /`facts:`\s*project\b/i.test(text) }
+}
+
+/** A plan with its levels numbered for `world`: a pack written as world 1 runs as whatever world it is given. */
+export function renumberPlan(plan: PlanLevel[], world: number): PlanLevel[] {
+  return plan.map(one => ({ ...one, level: one.level.replace(/^\d+-/, `${world}-`) }))
+}
+
+/** The pack's own word on its kind, from the first place it is found; a plain plan when it is not found. */
+export async function readPackMeta($: EngineInterface, pack: string, root: string, extra: string[]): Promise<PackMeta> {
+  const path = await findPack($, pack, root, extra)
+  if (!path) return { isMethod: false, isFacts: false }
+  try {
+    return packMeta(await $.fs.read(path))
+  } catch {
+    return { isMethod: false, isFacts: false }
+  }
+}
+
 /**
  * The next card to present in a run, from its plan: the first card of the
  * first level not done that has no answer yet. Undefined without a plan with

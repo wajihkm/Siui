@@ -1,7 +1,8 @@
 # Scaffold: a new project
 
 For an empty or young folder that will hold one project. Five levels; the boss applies.
-`changelog:` none.
+Its answers are the project's facts: every later world reads them and none asks them again.
+`changelog:` none. `facts:` project.
 
 ## Fixed facts (one info card, option "OK")
 

@@ -30,6 +30,15 @@ One card listing every decision, options "Apply", "Change one", "Stop"; what App
 The level headings must read `## Level <n>-<m> · <title> (<k> cards)`; the map and the
 status read the levels ahead from them. The last level is the boss.
 
+Two marks, written like `changelog:` in the opening lines, say what kind of pack it is:
+
+- `` `kind:` method ``: a way any world runs, not a piece of work. Its levels are the
+  stages of every world started with it, numbered for that world; it is never a planned
+  world of its own. Write it for one feature, bug or change at a time, and leave out
+  whatever the whole project decides once.
+- `` `facts:` project ``: the answers of this pack are the project's facts. They are
+  decided once, every later world reads them, and no card asks them again.
+
 ## Where packs live
 
 This folder holds the format; the packs themselves are the plugin's `scaffold` in

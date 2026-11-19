@@ -57,6 +57,7 @@ export const CARD_SCHEMA = {
     },
     world: { type: 'integer', minimum: 0, description: '0 = the side quests: a decision after a boss that belongs to no stage of a world' },
     pack: { type: 'string', pattern: '^[a-z0-9-]{2,60}$', description: 'The pack this world runs, e.g. "world-4-theme"; names the plan when the first card starts a new world' },
+    worldTitle: { type: 'string', maxLength: 40, description: 'The title of the world, on the first card of a world that runs a method (e.g. "spec-driven"): what this world is, e.g. "login page"' },
     mark: {
       type: 'string',
       enum: ['bug', 'feature', 'problem', 'check'],
@@ -241,6 +242,8 @@ export function normaliseCard(input: Record<string, unknown>, caps: Caps = DEFAU
   if (extraSources.length > 0) card.extraSources = extraSources
   const pack = typeof input.pack === 'string' && /^[a-z0-9-]{2,60}$/.test(input.pack.trim()) ? input.pack.trim() : ''
   if (pack) card.pack = pack
+  const worldTitle = cut(input.worldTitle, 40)
+  if (worldTitle) card.worldTitle = worldTitle
   const mark = input.mark === 'bug' || input.mark === 'feature' || input.mark === 'problem' || input.mark === 'check' ? input.mark : undefined
   if (mark) card.mark = mark
   const levelTitle = cut(input.levelTitle, caps.levelTitle)

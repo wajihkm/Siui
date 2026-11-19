@@ -420,8 +420,13 @@ class Board:
                         lines = handle.read().split("\n")
                 except OSError:
                     continue
+                text = "\n".join(lines)
                 pack = {"name": name, "title": name, "world": None, "levels": [], "path": path,
-                        "source": source, "hidden": name in hidden}
+                        "source": source, "hidden": name in hidden,
+                        # A method is a way any world runs, never a planned world of its own; a pack of project
+                        # facts is decided once for every later world.
+                        "kind": "method" if re.search(r"`kind:`\s*method\b", text, re.I) else "plan",
+                        "facts": bool(re.search(r"`facts:`\s*project\b", text, re.I))}
                 current = None
                 for line in lines:
                     first = title_line.match(line) if pack["title"] == name and line.startswith("# ") else None

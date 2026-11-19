@@ -30,6 +30,10 @@ export type GameRun = {
   finishedAt: string | null
   /** Set when the run was closed by a reset, not by a boss: the world shows as abandoned. */
   abandonedAt?: string
+  /** The world's own title, when it runs a method: the method names how it runs, the title what it is. */
+  title?: string
+  /** The answers of this run are project facts: decided once, read by every later world, never asked again. */
+  facts?: true
   levels: Record<string, 'open' | 'done'>
   /** Level titles and card counts, as the cards named them. */
   levelTitles?: Record<string, string>
@@ -275,6 +279,22 @@ export async function writeRecord(
 }
 
 export const SIDE_PACK = 'side'
+
+/** The project's facts: the card answers of the runs that hold them, `id: answer`, oldest first. */
+export function projectFacts(record: GameRecord): Array<{ id: string; title: string; answer: string }> {
+  const found: Array<{ id: string; title: string; answer: string }> = []
+  for (const run of record.runs) {
+    // A setup world run before the flag existed is the bundled scaffold pack.
+    if (run.facts !== true && run.pack !== 'scaffold') continue
+    if (run.abandonedAt) continue
+    for (const one of run.decisions) {
+      if (one.via === 'skipped' || one.queued) continue
+      found.push({ id: one.id, title: one.title, answer: one.answer })
+    }
+  }
+
+  return found
+}
 
 /** The side world: world 0, never finished, where decisions that belong to no stage of a world go, kept by month. */
 export function isSideRun(run: GameRun): boolean {
