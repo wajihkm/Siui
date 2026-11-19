@@ -1,7 +1,8 @@
 # Spec-driven: a feature specified, then built
 
-A method, not a piece of work: every world started with it takes one feature from an idea
-to a specification, a plan, a task list and the code, in the same four stages and a boss.
+Takes one feature from an idea to a specification, a plan, a task list and the code. A
+method, not a piece of work: every world started with it runs the same four stages and a
+boss.
 `changelog:` none. `kind:` method.
 
 ## Fixed facts (one info card, option "OK")

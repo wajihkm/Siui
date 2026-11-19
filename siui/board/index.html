@@ -48,8 +48,14 @@
   footer.bar button.icon svg { width: 16px; height: 16px; }
   footer.bar #autoBtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   footer.bar #chatFirstBtn.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
-  footer.bar select { font: inherit; font-size: 13px; padding: 3px 8px; border: 1px solid var(--line); border-radius: var(--radius-btn); background: var(--panel); color: var(--dim); cursor: pointer; max-width: 130px; }
-  footer.bar select:hover { border-color: var(--accent); color: var(--text); }
+  select { appearance: none; -webkit-appearance: none; font: inherit; color: var(--text); cursor: pointer; padding: 7px 32px 7px 11px; border: 1px solid var(--line); border-radius: var(--radius-s);
+    background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 1.5 6 6l4.5-4.5' fill='none' stroke='%23808898' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center / 11px 8px;
+    transition: border-color .12s, box-shadow .12s; }
+  select:hover { border-color: var(--accent); }
+  select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  select option { background: var(--panel); color: var(--text); }
+  footer.bar select { font-size: 13px; padding: 3px 26px 3px 9px; border-radius: var(--radius-btn); background-color: var(--panel); background-position: right 9px center; color: var(--dim); max-width: 140px; }
+  footer.bar select:hover { color: var(--text); }
   footer.bar details.menu.bar { position: relative; } footer.bar details.menu.bar > summary { list-style: none; cursor: pointer; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-btn); font-size: 13px; color: var(--dim); }
   footer.bar details.menu.bar > summary::-webkit-details-marker { display: none; } footer.bar details.menu.bar > summary:hover { border-color: var(--accent); color: var(--text); }
   footer.bar details.menu.bar .items { position: fixed; bottom: calc(var(--bar-h) + 6px); right: 20px; width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-s); box-shadow: 0 12px 30px rgba(0, 0, 0, .25); padding: 6px; z-index: 30; }
@@ -347,16 +353,18 @@
   .mark .txt { color: var(--dim); font-size: 12px; }
   .mark button { margin-left: 4px; }
   .addmark { display: grid; grid-template-columns: auto 1fr 1fr auto auto; gap: 8px; align-items: center; margin: 10px 0 0; }
-  .addmark select { padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); font: inherit; }
+  .addmark select { padding: 6px 30px 6px 9px; }
   @media (max-width: 700px) { .addmark { grid-template-columns: 1fr 1fr; } }
   dialog#ask, dialog#move { max-width: 440px; }
-  dialog#move select { display: block; width: 100%; margin-top: 4px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); }
+  dialog#move select { display: block; width: 100%; margin-top: 4px; font-weight: 400; }
   .askform { display: grid; gap: 12px; } .askform .asktext { margin: 0; white-space: pre-line; } .askbtns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog#newworld, dialog#ask, dialog#move, dialog#output { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); padding: 20px 22px; max-width: 520px; width: calc(100% - 40px); box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
   dialog#newworld::backdrop, dialog#ask::backdrop, dialog#move::backdrop, dialog#output::backdrop { background: rgba(0, 0, 0, .35); }
   .nwlabel { display: block; font-size: 13px; color: var(--dim); font-weight: 600; margin: 10px 0 0; }
   .nwlabel input, .nwlabel textarea { display: block; margin-top: 4px; font-weight: 400; color: var(--text); }
   .nwhow { display: grid; gap: 8px; margin-top: 12px; }
+  .nwmethod .nwhow { margin-top: 6px; }
+  .nwmethod + .nwplain { margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--line); }
   .nwhow label { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: baseline; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); cursor: pointer; font-size: 14px; }
   .nwhow label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
   .nwhow .g { grid-column: 2; color: var(--dim); font-size: 12.5px; }
@@ -491,8 +499,8 @@
     <h3 class="nwtitle" style="margin:0 0 10px;font-size:16px">New world</h3>
     <label class="nwlabel">Title<input type="text" name="title" placeholder="release, onboarding, performance…" autocomplete="off" required maxlength="60"></label>
     <label class="nwlabel">What it is about<textarea name="about" placeholder="One or two lines: the goal, what must be decided, what is fixed" maxlength="400"></textarea></label>
-    <label class="nwlabel nwmethod" hidden>Method<select name="method"></select><span class="g">how the world runs: a method's stages are the same for every world started with it</span></label>
-    <div class="nwhow">
+    <div class="nwmethod" hidden><span class="nwlabel">How it runs</span><div class="nwhow nwmethods"></div></div>
+    <div class="nwhow nwplain">
       <label><input type="radio" name="how" value="pack" checked> <b>Write a pack first</b><span class="g">the chat writes the levels and cards, then starts them; the pack stays for later</span></label>
       <label><input type="radio" name="how" value="adhoc"> <b>Ad hoc, start now</b><span class="g">levels made on the fly from what you describe; nothing planned ahead on the map</span></label>
     </div>
@@ -1223,11 +1231,12 @@
     d.querySelector('input[name=title]').value = '';
     d.querySelector('textarea[name=about]').value = '';
     d.querySelector('input[name=how][value=pack]').checked = true;
-    const ms = methods(), sel = d.querySelector('select[name=method]');
-    sel.innerHTML = '<option value="">Plain: levels written for this one</option>' + ms.map(m => `<option value="${esc(m.name)}">${esc(m.title)}</option>`).join('');
+    const ms = methods(), box = d.querySelector('.nwmethods'), plain = d.querySelector('.nwplain');
+    box.innerHTML = `<label><input type="radio" name="method" value="" checked> <b>Plain</b><span class="g">${esc(w('stage'))}s written for this ${esc(w('world'))} alone</span></label>` +
+      ms.map(m => `<label><input type="radio" name="method" value="${esc(m.name)}"> <b>${esc(m.title.split(':')[0])}</b><span class="g">${esc(m.about || m.title)}${m.source === 'plugin' ? '' : ' · this project\'s own'}</span></label>`).join('');
     d.querySelector('.nwmethod').hidden = ms.length === 0;
-    d.querySelector('.nwhow').hidden = false;
-    sel.onchange = () => { d.querySelector('.nwhow').hidden = sel.value !== ''; };
+    plain.hidden = false;
+    box.onchange = () => { plain.hidden = d.querySelector('input[name=method]:checked').value !== ''; };
     d.showModal();
     d.querySelector('input[name=title]').focus();
   }
@@ -1240,7 +1249,8 @@
     const n = Math.max(0, ...runs.map(r => r.world), ...pendingPacks(state && state.record).map(p => p.world || 0)) + 1;
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'world';
     const name = `world-${n}-${slug}`;
-    const method = methods().find(m => m.name === f.method.value);
+    const picked = f.querySelector('input[name=method]:checked');
+    const method = methods().find(m => m.name === (picked ? picked.value : ''));
     const text = method
       ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${method.name}: read the pack at ${method.path} and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${method.name}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
       : how === 'pack'

@@ -426,7 +426,8 @@ class Board:
                         # A method is a way any world runs, never a planned world of its own; a pack of project
                         # facts is decided once for every later world.
                         "kind": "method" if re.search(r"`kind:`\s*method\b", text, re.I) else "plan",
-                        "facts": bool(re.search(r"`facts:`\s*project\b", text, re.I))}
+                        "facts": bool(re.search(r"`facts:`\s*project\b", text, re.I)),
+                        "about": pack_about(lines)}
                 current = None
                 for line in lines:
                     first = title_line.match(line) if pack["title"] == name and line.startswith("# ") else None
@@ -1107,6 +1108,23 @@ def restart_self(server, board, port):
         subprocess.run([sys.executable, "-I", launcher, "start", *args], timeout=30)
     finally:
         os._exit(0)
+
+
+def pack_about(lines):
+    """A pack's own first sentence, for a picker: the paragraph under its title, its marks left out, cut short."""
+    words = []
+    for line in lines[1:]:
+        if line.startswith("#"):
+            break
+        if not line.strip():
+            if words:
+                break
+            continue
+        words.append(line.strip())
+    text = re.sub(r"`[a-z]+:`\s*[a-z]+\.?", "", " ".join(words))
+    text = re.sub(r"\s+", " ", text).strip()
+    first = re.split(r"(?<=[.:])\s", text, maxsplit=1)[0].rstrip(":")
+    return first[:150]
 
 
 def port_answers(port):
