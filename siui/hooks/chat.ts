@@ -1,7 +1,8 @@
 // The chat log: one line per turn of the conversation, with the user's words,
 // the model's answer cut short, and the level that was current, so the board
 // shows what was said around each step. Kept in the project beside the
-// record, as JSON lines, appended by the `turn.complete` hook.
+// record, as JSON lines, appended by the `turn.complete` hook while game mode
+// is on, and ignored by git through a `.gitignore` written beside it.
 
 import { join } from './paths'
 import type { EngineInterface } from 'claude-code'
@@ -24,6 +25,32 @@ function cutText(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat
 }
 
+const IGNORE_MARK = '# Siui: files of this machine, not of the repository'
+
+/**
+ * Keeps the chat log, the exports and the record's leftovers out of git: a
+ * `.gitignore` beside the log, written once. The log holds the person's own
+ * prompts and the answers; a `git add -A`, theirs or a save point's, must not
+ * take it. A file that already carries the mark is left as its owner made it,
+ * so deleting a line under the mark is how one opts a file back in.
+ */
+export async function ignoreLocalFiles($: EngineInterface, root: string, relative: string = CHAT_PATH): Promise<void> {
+  const log = chatPath(root, relative)
+  const cut = Math.max(log.lastIndexOf('/'), log.lastIndexOf('\\'))
+  if (cut <= 0) return
+  const folder = log.slice(0, cut)
+  const stem = log.slice(cut + 1).replace(/\.jsonl$/, '')
+  const path = `${folder}/.gitignore`
+  const lines = [IGNORE_MARK, `${stem}*.jsonl`, 'exports/', 'decisions.json.tmp-*', 'decisions.json.broken-*']
+  try {
+    const had = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    if (had.includes(IGNORE_MARK)) return
+    await $.fs.write(path, `${had}${had !== '' && !had.endsWith('\n') ? '\n' : ''}${lines.join('\n')}\n`)
+  } catch {
+    // a folder that cannot be written keeps no log either
+  }
+}
+
 /** Appends one turn; a turn with nothing said on either side is not written. */
 export async function appendChat(
   $: EngineInterface,
@@ -35,6 +62,7 @@ export async function appendChat(
   const assistant = cutText(turn.assistant, ANSWER_MAX)
   if (user === '' && assistant === '') return false
   const path = chatPath(root, relative)
+  await ignoreLocalFiles($, root, relative)
   const line = JSON.stringify({ at: new Date().toISOString(), world: turn.world, level: turn.level, user, assistant })
   let had = ''
   if (await $.fs.exists(path)) {

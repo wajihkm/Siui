@@ -688,14 +688,18 @@ export const register: Register = on => {
       pendingUser = ''
       const where = await read($, progress)
       const root = await $.session.root()
-      await appendChat($, root, config.chatLog, {
-        world: where?.world ?? null,
-        level: where?.level ?? '',
-        user,
-        assistant: e.reason === 'refusal' ? '' : e.answer,
-      })
+      // Nothing is written into a project while game mode is off: no chat log, no mark, no cost.
+      const isPlaying = await read($, isOn)
+      if (isPlaying) {
+        await appendChat($, root, config.chatLog, {
+          world: where?.world ?? null,
+          level: where?.level ?? '',
+          user,
+          assistant: e.reason === 'refusal' ? '' : e.answer,
+        })
+      }
       // A turn that did work after an answer marks that answer built: the board then offers no queue for it.
-      if (turnHadWork && (await read($, card)) === null) {
+      if (isPlaying && turnHadWork && (await read($, card)) === null) {
         const record = await readRecord($, root, config.record)
         let latest: GameDecision | undefined
         for (const run of record.runs) for (const one of run.decisions) {
@@ -712,8 +716,10 @@ export const register: Register = on => {
       offRequested = false
       // The turn's cost goes to the decision that was current.
       try {
-        const costs = await readRecord($, root, config.record)
-        if (await settleCost($, costs)) await writeRecord($, root, costs, config.record)
+        if (isPlaying) {
+          const costs = await readRecord($, root, config.record)
+          if (await settleCost($, costs)) await writeRecord($, root, costs, config.record)
+        }
       } catch {
         // the cost is a mirror of the session's ledger; a missed reading is caught up at the next
       }
