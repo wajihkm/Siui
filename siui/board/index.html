@@ -350,6 +350,14 @@
   .addmark select { padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); font: inherit; }
   @media (max-width: 700px) { .addmark { grid-template-columns: 1fr 1fr; } }
   dialog#ask, dialog#move { max-width: 440px; }
+  /* A page without the board's key: one calm screen over everything, saying what to do. */
+  #nokey { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--bg); }
+  #nokey[hidden] { display: none; }
+  #nokey .box { max-width: 560px; padding: 28px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  #nokey h2 { margin: 0 0 12px; font-size: 1.35em; }
+  #nokey p { margin: 10px 0 0; line-height: 1.55; }
+  #nokey p.g { color: var(--dim); }
+  #nokey code { padding: 2px 7px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); font-family: ui-monospace, Consolas, monospace; font-size: .95em; white-space: nowrap; }
   dialog#move select { display: block; width: 100%; margin-top: 4px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); }
   .askform { display: grid; gap: 12px; } .askform .asktext { margin: 0; white-space: pre-line; } .askbtns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog#newworld, dialog#ask, dialog#move, dialog#output { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); padding: 20px 22px; max-width: 520px; width: calc(100% - 40px); box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
@@ -432,6 +440,14 @@
   })();
 </script>
 <body>
+<div id="nokey" hidden role="alertdialog" aria-labelledby="nokeyTitle" aria-describedby="nokeyHow">
+  <div class="box">
+    <h2 id="nokeyTitle">This board needs its key</h2>
+    <p id="nokeyHow">In the chat, run <code>/siui board</code>. It opens the board with its key.</p>
+    <p class="g">For a bookmark, or the editor's own browser, run <code>/siui board link</code> and open the link it prints.</p>
+    <p class="g">The key keeps the board yours: without it, nothing else on this machine can read it or write to your chat.</p>
+  </div>
+</div>
 <header>
   <img class="logo" src="/icon.svg" alt="" width="24" height="24">
   <h1 id="title">Siui</h1>
@@ -613,10 +629,47 @@
   }
 
   /** A POST to the board's server: the parsed body when it answered ok, else null after a toast with its error. */
+  /**
+   * The board's key. The server answers only calls that carry it, so another program or person on this machine, who
+   * can reach the port, cannot read the board or write to the chat. It arrives once, in the address: a one-time pass
+   * that `/siui board` put there (traded for the key), or the key itself in a link the person keeps. It is kept by this
+   * browser for this address and taken out of the address bar at once.
+   */
+  const KEY_STORE = 'siui.key';
+  let boardKey = '', keyMissing = false;
+  const stored = { get: () => { try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; } },
+    set: v => { try { if (v) localStorage.setItem(KEY_STORE, v); else localStorage.removeItem(KEY_STORE); } catch (e) { /* a browser that keeps nothing: the key lasts as long as the page */ } } };
+  async function enter() {
+    const q = new URLSearchParams(location.search), given = q.get('k') || '', pass = q.get('p') || '';
+    if (q.has('k') || q.has('p')) { q.delete('k'); q.delete('p'); const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash); }
+    const shaped = v => /^[A-Za-z0-9_-]{32,128}$/.test(v);
+    if (shaped(given)) boardKey = given;
+    else if (shaped(pass)) {
+      try {
+        const data = await (await fetch('/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pass }) })).json();
+        if (data && data.ok === true && shaped(String(data.key || ''))) boardKey = data.key;
+      } catch (e) { /* the stored key, if any, is tried next */ }
+    }
+    if (boardKey) stored.set(boardKey); else boardKey = stored.get();
+  }
+  /** The page has no key, or one this board does not know: it is forgotten, the polling stops, the screen says what to do. */
+  function needKey() {
+    if (keyMissing) return;
+    keyMissing = true; boardKey = ''; stored.set('');
+    document.querySelectorAll('dialog[open]').forEach(d => { try { d.close(); } catch (e) { /* not open */ } });
+    $('nokey').hidden = false;
+  }
+  /** A call to the board's server, with the key. */
+  async function api(route, options) {
+    const o = options || {};
+    const res = await fetch(route, Object.assign({ cache: 'no-store' }, o, { headers: Object.assign({ 'X-Siui-Key': boardKey }, o.headers || {}) }));
+    if (res.status === 401) needKey();
+    return res;
+  }
   async function post(route, body) {
     let data = {};
     try {
-      const res = await fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const res = await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
       data = await res.json().catch(() => ({}));
     } catch (e) { data = { error: 'the board server was not reached' }; }
     if (data.ok !== true) { toast(data.error || 'failed'); return null; }
@@ -931,7 +984,7 @@
   async function loadUniverse(name) {
     let set = universeCache[name];
     if (!set) {
-      try { set = await (await fetch(`/universe?name=${encodeURIComponent(name)}`, { cache: 'no-store' })).json(); } catch (e) { set = null; }
+      try { set = await (await api(`/universe?name=${encodeURIComponent(name)}`)).json(); } catch (e) { set = null; }
       if (!set || set.error) set = { name: 'classic' };
       universeCache[name] = set;
     }
@@ -2718,7 +2771,8 @@
   }
 
   async function fetchState() {
-    const res = await fetch('/state', { cache: 'no-store' });
+    const res = await api('/state');
+    if (keyMissing) return;
     if (!res.ok) throw new Error(`the board's server answered ${res.status}`);
     const data = tidyState(await res.json());
     renderAgent(data);
@@ -2742,10 +2796,11 @@
   /** The polling: /head every 300 ms (2 s while the tab is hidden) for its small {"v": "…"}; /state only when v changed or on the first poll; one request at a time, the next scheduled after each answer. */
   let headV = null, pollTimer = 0, polling = false;
   async function poll() {
-    if (polling) return;
+    if (polling || keyMissing) return;
     polling = true; clearTimeout(pollTimer);
     try {
-      const res = await fetch('/head', { cache: 'no-store' });
+      const res = await api('/head');
+      if (keyMissing) { polling = false; return; }
       // A server without /head is polled the old way: the state every time.
       const head = res.ok ? ((await res.json()) || {}) : null;
       const v = head ? String(head.v ?? '') : null;
@@ -2766,7 +2821,7 @@
     }
     renderLive();
     polling = false;
-    pollTimer = setTimeout(poll, document.hidden ? 2000 : 300);
+    if (!keyMissing) pollTimer = setTimeout(poll, document.hidden ? 2000 : 300);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 
@@ -2912,7 +2967,7 @@
   initNow();
   let resizeTimer = 0;
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state) render(true); }, 120); });
-  poll();
+  enter().then(poll);
 })();
 </script>
 </body>

@@ -7,20 +7,28 @@ file; GET /state answers the record, the live card and the configuration, GET
 /head a stamp that moves whenever /state would (the page polls that and fetches
 /state on a change); POST /answer, /note, /prompt and /open take the page's
 input. Only the page may call the routes beyond /, /icon.svg and /icon.png: a local Origin
-or Host, and JSON for a POST; anything else is refused. Everything runtime lives
-in the run folder the plugin names: the live card, the answer inbox, the prompt
-inbox, the page's liveness mark and the plugin's heartbeat. The server exits by
-itself when the plugin's heartbeat stops or a stop file appears.
+or Host, JSON for a POST, and the board's key in a header; anything else is
+refused. The key is a file in the run folder, the user's alone: another program
+or another person on this machine reaches the port but not the file. The page
+gets it once, from a one-time pass in the address `/siui board` opens (POST
+/enter) or from a link that holds the key itself, and keeps it in the browser.
+Everything runtime lives in the run folder the plugin names: the live card, the
+answer inbox, the prompt inbox, the page's liveness mark and the plugin's
+heartbeat. The server exits by itself when the plugin's heartbeat stops or a
+stop file appears.
 
 Binds 127.0.0.1 only. Standard library only.
 """
 
 import argparse
+import base64
 import glob
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -35,6 +43,42 @@ PORT_SPAN = 10  # the ports tried from --port up; an Origin on any of them is th
 MAX_BODY = 1 << 20  # a POST body is at most 1 MB; an export may be 24 MB
 MAX_EXPORT_BODY = 24 << 20
 LOCAL_NAMES = ("127.0.0.1", "localhost")
+KEY_HEADER = "X-Siui-Key"
+KEY_SHAPE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+PASS_SECONDS = 120  # how long a one-time pass may wait for its page
+
+
+def new_key(path):
+    """Writes a fresh key to its file, the user's alone, in one step, and returns it."""
+    key = secrets.token_urlsafe(32)
+    handle = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w", encoding="ascii") as out:
+        out.write(key + "\n")
+    os.replace(path + ".new", path)
+    return key
+
+
+def load_key(path):
+    """The board's key: made once per run folder and kept, so a bookmark that holds it works after a restart."""
+    try:
+        with open(path, encoding="ascii") as handle:
+            key = handle.read().strip()
+        if KEY_SHAPE.match(key):
+            return key
+    except (OSError, ValueError):
+        pass
+    return new_key(path)
+
+
+def page_policy(page):
+    """The page's content security policy: its own two scripts by their hashes and nothing else that runs, no
+    address but this server's to call or load from. A value that slipped through as markup would find no way to act.
+    No frame rule: the editor's own browser shows the board in a frame, and a copy framed by another site has no key
+    (the browser keeps each site's storage apart), so there is nothing in it to click."""
+    hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(script).digest()).decode("ascii") + "'"
+                      for script in re.findall(rb"<script>(.*?)</script>", page, re.S))
+    return ("default-src 'none'; script-src " + hashes + "; style-src 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; base-uri 'none'; form-action 'none'")
 # What a prompt to the chat may carry from the record: ids of a fixed shape. A prompt is read as the person's own
 # words, and the record is a file a cloned repository brings with it: a title could hold a sentence for the assistant.
 LEVEL_ID = re.compile(r"^\d+-\d+[ab]?$")
@@ -187,6 +231,43 @@ class Board:
         self.record_missing_since = None  # when the record file vanished, for the grace that covers a git reset
         self._git_identity = None  # the -c identity options, found once
         os.makedirs(self.run, exist_ok=True)
+        self.key = load_key(self.path("key"))
+        self.port = args.port  # the port held, set once bound: the launcher's proof names it
+        self.spent_pass = None  # the last pass traded for the key: a second try at it means two programs held it
+
+    def proof(self, nonce):
+        """An answer only this board can give: the launcher asks with a fresh nonce and checks the answer against the
+        key file, so it knows the server on a port is this project's without sending the key to whatever listens
+        there. The port is part of it, so another program cannot pass the question on to the real board."""
+        return hmac.new(self.key.encode("ascii"), f"{nonce}:{self.port}".encode("ascii"), hashlib.sha256).hexdigest()
+
+    def enter(self, body):
+        """Trades a one-time pass for the key. `/siui board` writes the pass into the run folder and opens the page
+        with it in the address: it works once, for two minutes. The pass is seen for a moment by whoever can list
+        this machine's processes, so a second try at a spent pass is taken as two programs holding it: the key is
+        changed, and every page asks to be opened from the chat again."""
+        given = str(body.get("pass") or "")
+        if not KEY_SHAPE.match(given):
+            return {"ok": False, "error": "no pass"}
+        with self.lock:
+            digest = hashlib.sha256(given.encode("ascii")).hexdigest()
+            if self.spent_pass is not None and hmac.compare_digest(digest, self.spent_pass):
+                self.key = new_key(self.path("key"))
+                self.spent_pass = None
+                return {"ok": False, "error": "this pass was used already; the board's key was changed: run /siui board in the chat"}
+            made = read_json(self.path("pass"), None)
+            wanted = made.get("pass") if isinstance(made, dict) else None
+            at = made.get("at") if isinstance(made, dict) else None
+            if not isinstance(wanted, str) or not isinstance(at, (int, float)) or not hmac.compare_digest(given.encode("ascii"), wanted.encode("utf-8", "replace")):
+                return {"ok": False, "error": "no such pass: run /siui board in the chat"}
+            try:
+                os.remove(self.path("pass"))
+            except OSError:
+                pass
+            if time.time() - at > PASS_SECONDS:
+                return {"ok": False, "error": "this pass is too old: run /siui board in the chat"}
+            self.spent_pass = digest
+            return {"ok": True, "key": self.key}
 
     def local_origin(self, origin):
         """Whether an Origin header names this server: http, a local name and a port of its range."""
@@ -992,30 +1073,58 @@ def make_handler(board):
         def log_message(self, *_):
             pass
 
-        def send_json(self, data, status=200):
-            payload = json.dumps(data).encode("utf-8")
+        def send_bytes(self, payload, kind, status=200, headers=()):
             self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for name, value in headers:
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(payload)
 
+        def send_json(self, data, status=200):
+            # Data is for the page alone: no other site may load it as a script or a picture.
+            self.send_bytes(json.dumps(data).encode("utf-8"), "application/json; charset=utf-8", status,
+                            (("Cross-Origin-Resource-Policy", "same-origin"),))
+
         def allowed(self):
-            """Whether the call is the page's own: an Origin on one of this server's ports, or none and a local Host.
-            Another local site's page would send its own Origin; a stray tool would send neither name."""
+            """Whether the call may be the page's own: an Origin on one of this server's ports, or none and a local
+            Host; never a request a browser marks as coming from another site. Another local site's page would send
+            its own Origin; a stray tool would send neither name."""
+            if (self.headers.get("Sec-Fetch-Site") or "").strip().lower() == "cross-site":
+                return False
             origin = self.headers.get("Origin")
             if origin is not None:
                 return board.local_origin(origin)
             return board.local_host(self.headers.get("Host") or "")
 
+        def keyed(self):
+            """Whether the call carries the board's key."""
+            given = self.headers.get(KEY_HEADER) or ""
+            return hmac.compare_digest(given.encode("utf-8", "replace"), board.key.encode("ascii"))
+
         def forbid(self):
             self.send_json({"ok": False, "error": "forbidden"}, 403)
 
+        def no_key(self):
+            self.send_json({"ok": False, "error": "the board's key is missing or not this board's"}, 401)
+
         def do_GET(self):
             route = urlparse(self.path).path
-            if route in ("/state", "/head", "/universes", "/universe") and not self.allowed():
+            # The page and its icon are the same for everyone and may be reached from a link or a frame on another
+            # site (the editor's own browser is one): a local Host is all they ask. The rest is the page's own calls.
+            if route in ("/", "/index.html", "/icon.svg", "/icon.png"):
+                if not board.local_host(self.headers.get("Host") or ""):
+                    self.forbid()
+                    return
+            elif not self.allowed():
                 self.forbid()
+                return
+            if route in ("/state", "/head", "/universes", "/universe") and not self.keyed():
+                self.no_key()
                 return
             if route in ("/", "/index.html"):
                 try:
@@ -1024,12 +1133,9 @@ def make_handler(board):
                 except OSError:
                     self.send_json({"error": "index.html is missing"}, 500)
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(page)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(page)
+                # One kind of line end, so the scripts the browser reads are the bytes the policy's hashes were made of.
+                page = page.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                self.send_bytes(page, "text/html; charset=utf-8", 200, (("Content-Security-Policy", page_policy(page)),))
             elif route in ("/icon.svg", "/icon.png"):
                 try:
                     with open(os.path.join(HERE, "..", route.lstrip("/")), "rb") as handle:
@@ -1037,12 +1143,13 @@ def make_handler(board):
                 except OSError:
                     self.send_json({"error": "the icon is missing"}, 404)
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png" if route.endswith(".png") else "image/svg+xml")
-                self.send_header("Content-Length", str(len(icon)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(icon)
+                self.send_bytes(icon, "image/png" if route.endswith(".png") else "image/svg+xml")
+            elif route == "/id":
+                nonce = (parse_qs(urlparse(self.path).query).get("n") or [""])[0]
+                if not re.match(r"^[A-Za-z0-9_-]{16,64}$", nonce):
+                    self.send_json({"error": "a nonce is required"}, 400)
+                else:
+                    self.send_json({"siui": True, "proof": board.proof(nonce)})
             elif route == "/state":
                 self.send_json(board.state())
             elif route == "/head":
@@ -1064,6 +1171,9 @@ def make_handler(board):
             if not self.allowed() or not (self.headers.get("Content-Type") or "").strip().lower().startswith("application/json"):
                 self.forbid()
                 return
+            if route != "/enter" and not self.keyed():
+                self.no_key()
+                return
             try:
                 length = int(self.headers.get("Content-Length"))
             except (TypeError, ValueError):
@@ -1080,6 +1190,7 @@ def make_handler(board):
             if not isinstance(body, dict):
                 body = {}
             routes = {
+                "/enter": board.enter,
                 "/answer": board.answer,
                 "/note": board.note,
                 "/prompt": board.prompt,
@@ -1196,6 +1307,7 @@ def main():
                 continue
             server = BoardServer(("127.0.0.1", candidate), make_handler(board))
             port = candidate
+            board.port = candidate
             break
         except OSError:
             continue

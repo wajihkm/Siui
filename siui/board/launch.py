@@ -5,17 +5,26 @@ done here the right way on every platform, Windows included.
     launch.py folder <run>                    makes the run folder, the user's alone; exit 1 when it is not theirs
     launch.py start --root R --run F --record P --chat C --port N [--ipc S]
                                               clears a stop file and starts server.py detached, its output in server.log
-    launch.py probe <port>                    prints the project root the server on that port serves; exit 1 when none
+    launch.py probe <port> <run>              whether the server on that port is this run folder's board: exit 0 when
+                                              it proves it holds the folder's key, 3 when something else answers
+                                              there, 1 when nothing does
+    launch.py pass <run>                      writes a one-time pass into the run folder and prints it: the page
+                                              opened with it in its address trades it for the board's key
     launch.py move <from> <to>                renames one file over another in one step
     launch.py remove <path>...                removes files; a missing one is fine
 
 Standard library only.
 """
 
+import hashlib
+import hmac
 import json
 import os
+import secrets
+import socket
 import subprocess
 import sys
+import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,12 +70,55 @@ def start(argv):
     return 1
 
 
-def probe(port):
+def probe(port, run):
+    """Asks the server on the port to prove it holds this run folder's key: a fresh nonce goes out, and the answer
+    is checked here against the key file. The key itself is never sent, so a program that took the port learns
+    nothing; and the port is part of the answer, so it cannot pass the question on to the real board."""
     try:
-        state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/state", timeout=2))
-    except Exception:  # noqa: BLE001 - nothing answers, or it is not the board
+        port = int(port)
+        with open(os.path.join(run, "key"), encoding="ascii") as handle:
+            key = handle.read().strip()
+    except (OSError, ValueError):
+        key = ""
+    nonce = secrets.token_urlsafe(24)
+    try:
+        # No proxy: the call is to this machine.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        answer = json.load(opener.open(f"http://127.0.0.1:{port}/id?n={nonce}", timeout=2))
+    except Exception:  # noqa: BLE001 - nothing answers, or not in JSON
+        # A listener that is not a board (or an older board) still holds the port.
+        return 3 if port_taken(port) else 1
+    wanted = hmac.new(key.encode("ascii", "replace"), f"{nonce}:{port}".encode("ascii"), hashlib.sha256).hexdigest()
+    proof = answer.get("proof") if isinstance(answer, dict) else None
+    return 0 if key and isinstance(proof, str) and hmac.compare_digest(proof, wanted) else 3
+
+
+def port_taken(port):
+    """Whether anything listens on the port."""
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_socket.settimeout(0.5)
+    try:
+        return probe_socket.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+    finally:
+        probe_socket.close()
+
+
+def make_pass(run):
+    """A one-time pass for the page: written into the run folder, the user's alone, and printed for the address."""
+    if folder(run) != 0:
         return 1
-    print(str(state.get("root") or ""))
+    made = secrets.token_urlsafe(32)
+    path = os.path.join(run, "pass")
+    try:
+        handle = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="ascii") as out:
+            json.dump({"pass": made, "at": time.time()}, out)
+        os.replace(path + ".new", path)
+    except OSError:
+        return 1
+    print(made)
     return 0
 
 
@@ -94,8 +146,10 @@ def main():
         return folder(args[1])
     if verb == "start":
         return start(args[1:])
-    if verb == "probe" and len(args) == 2:
-        return probe(args[1])
+    if verb == "probe" and len(args) == 3:
+        return probe(args[1], args[2])
+    if verb == "pass" and len(args) == 2:
+        return make_pass(args[1])
     if verb == "move" and len(args) == 3:
         return move(args[1], args[2])
     if verb == "remove":

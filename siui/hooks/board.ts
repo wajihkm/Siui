@@ -11,7 +11,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GameCard } from '../types'
-import { homeOf, isWindows, join, launch, python, samePath, trimEnd } from './paths'
+import { homeOf, isWindows, join, launch, python, trimEnd } from './paths'
 
 const DEFAULT_PORT = 5131
 const RUN_FOLDER = 'siui'
@@ -34,6 +34,8 @@ export type BoardPaths = {
   auto: string
   /** The chat-first switch, shared with the page: `{ "on": true }` keeps cards in the chat dialog while the page is open. */
   chatFirst: string
+  /** The board's key, written by its server: every call of the page carries it. */
+  key: string
 }
 
 /** What the chat is doing, as the board's header shows it. */
@@ -61,6 +63,7 @@ export async function boardPaths($: EngineInterface, root: string): Promise<Boar
     status: `${run}/status.json`,
     auto: `${run}/auto.json`,
     chatFirst: `${run}/chat-first.json`,
+    key: `${run}/key`,
   }
 }
 
@@ -189,12 +192,14 @@ async function ensureRunFolder($: EngineInterface, paths: BoardPaths): Promise<b
 }
 
 /**
- * Starts the server detached unless one answers already for this project,
- * and returns its port. A server that answers but serves another root (a
- * stale port file, another project's server on the same port) is left alone
- * and a fresh one starts on the next port. The launcher starts it detached,
- * so the command returns at once and the server lives on; the server exits
- * by itself when the heartbeat stops.
+ * Starts the server detached unless this project's own answers already, and
+ * returns its port. The server on the port the run folder names is this
+ * project's when it proves it holds the folder's key. One that answers
+ * without that proof (a board from before the key, or another program on a
+ * stale port) is asked to end; when it stays, a fresh server starts on the
+ * next port. The launcher starts it detached, so the command returns at once
+ * and the server lives on; the server exits by itself when the heartbeat
+ * stops.
  */
 export async function ensureServer(
   $: EngineInterface,
@@ -215,9 +220,19 @@ export async function ensureServer(
   const running = await serverPort($, paths)
   let startAt = port
   if (running !== undefined) {
-    const served = await servedRoot($, running)
-    if (served !== undefined && samePath(served, root)) return running
-    if (served !== undefined) startAt = running + 1
+    let there = await whoServes($, paths, running)
+    if (there === 'ours') return running
+    if (there === 'other') {
+      // What the port file names answers but cannot prove it holds the key: a board from before the key, still
+      // running, or another program on its port. It is asked to end, so no board without a key is left up.
+      await $.fs.write(paths.stop, '')
+      for (let i = 0; i < 24 && there === 'other'; i += 1) {
+        await $.clock.sleep(250)
+        there = await whoServes($, paths, running)
+      }
+      await launch($, ['remove', paths.stop])
+      if (there === 'other') startAt = running + 1
+    }
   }
   const ipc = (await $.env.get('VSCODE_IPC_HOOK_CLI')) ?? ''
   const startedAt = Date.now()
@@ -256,18 +271,50 @@ async function isPortFileFresh($: EngineInterface, paths: BoardPaths, since: num
   }
 }
 
-/** The project root a server on `port` reports in GET /state; undefined when nothing answers. */
-async function servedRoot($: EngineInterface, port: number): Promise<string | undefined> {
-  const probe = await launch($, ['probe', String(port)], 5_000)
-  if (probe.exitCode !== 0) return undefined
-  const root = probe.stdout.trim()
+/**
+ * What answers on `port`: this project's board, which proves it holds the run
+ * folder's key ('ours'); another program or another project's board
+ * ('other'); or nothing. The launcher asks with a nonce and checks the answer
+ * against the key file, so the key itself is never sent to the port.
+ */
+async function whoServes($: EngineInterface, paths: BoardPaths, port: number): Promise<'ours' | 'other' | 'nothing'> {
+  const probe = await launch($, ['probe', String(port), paths.run], 5_000)
 
-  return root === '' ? undefined : trimEnd(root)
+  return probe.exitCode === 0 ? 'ours' : probe.exitCode === 3 ? 'other' : 'nothing'
 }
 
-/** Opens the page in the user's browser: Windows' default from WSL, else the desktop's. */
-export async function openBrowser($: EngineInterface, port: number): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/`
+/**
+ * A one-time pass for the page, written into the run folder by the launcher.
+ * The address the browser is opened with holds the pass, not the key: an
+ * address is seen for a moment by whoever lists this machine's processes,
+ * and a pass works once.
+ */
+async function makePass($: EngineInterface, paths: BoardPaths): Promise<string> {
+  try {
+    const made = await launch($, ['pass', paths.run], 5_000)
+    const pass = made.stdout.trim()
+
+    return made.exitCode === 0 && /^[A-Za-z0-9_-]{32,128}$/.test(pass) ? pass : ''
+  } catch {
+    return ''
+  }
+}
+
+/** The address that holds the board's key itself, for a bookmark or the editor's own browser; '' when the key is not there. */
+export async function keyLink($: EngineInterface, paths: BoardPaths, port: number): Promise<string> {
+  try {
+    const key = (await $.fs.read(paths.key)).trim()
+
+    return /^[A-Za-z0-9_-]{32,128}$/.test(key) ? `http://127.0.0.1:${port}/?k=${key}` : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Opens the page in the user's browser, with a one-time pass for the board's key: Windows' default from WSL, else the desktop's. */
+export async function openBrowser($: EngineInterface, paths: BoardPaths, port: number): Promise<boolean> {
+  const pass = await makePass($, paths)
+  const url = `http://127.0.0.1:${port}/${pass ? `?p=${pass}` : ''}`
   const tries: string[][] = [
     ['wslview', url],
     ['powershell.exe', '-NoProfile', '-Command', `Start-Process '${url}'`],

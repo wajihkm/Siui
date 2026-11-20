@@ -21,6 +21,7 @@ import {
   ensureServer,
   isAutoOn,
   isBoardLive,
+  keyLink,
   openBrowser,
   publishCard,
   setAuto,
@@ -254,12 +255,27 @@ async function openBoard($: EngineInterface, root: string): Promise<string> {
   if (port === undefined) return `The board server did not start; see ${paths.run}/server.log.`
   await $.store.set(`board:${root}`, true)
   startBoardTimers($, paths)
-  const isOpened = await openBrowser($, port)
+  const isOpened = await openBrowser($, paths, port)
   const url = `http://127.0.0.1:${port}/`
 
   return isOpened
     ? `Board at ${url}: cards are answered there while the page is open; close the tab to answer in the chat.`
-    : `Board at ${url}; open it in a browser. Cards are answered there while the page is open.`
+    : `Board at ${url}, not opened: no browser was found. Run /siui board link for a link that opens it with its key. Cards are answered there while the page is open.`
+}
+
+/** The link that holds the board's key, for a bookmark or the editor's own browser: `/siui board link`. */
+async function boardLink($: EngineInterface, root: string): Promise<string> {
+  const paths = await boardPaths($, root)
+  const made = await readConfig($, root)
+  const port = await ensureServer($, paths, root, made.record, made.boardPort, made.chatLog)
+  if (port === undefined) return `The board server did not start; see ${paths.run}/server.log.`
+  await $.store.set(`board:${root}`, true)
+  startBoardTimers($, paths)
+  const link = await keyLink($, paths, port)
+
+  return link
+    ? `The board's link, with its key: ${link}\nIt is for a bookmark or the editor's own browser. Keep it to yourself: whoever holds it can answer your cards and write to this chat.`
+    : `The board's key was not found in ${paths.run}; run /siui board off, then /siui board.`
 }
 
 /**
@@ -420,6 +436,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
 
       return { text: 'Board stopped; close its browser tab.' }
     }
+    if ((rest[0] ?? '').toLowerCase() === 'link') return { text: await boardLink($, root) }
 
     return { text: await openBoard($, root) }
   }
