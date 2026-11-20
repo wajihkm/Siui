@@ -11,7 +11,7 @@ import { CAPS } from './input'
 import { RECORD_PATH } from './record'
 import type { Words } from './words'
 import { DEFAULT_WORDS } from './words'
-import { isAbsolute, join, trimEnd } from './paths'
+import { isAbsolute, isNetwork, join, trimEnd } from './paths'
 
 export const CONFIG_PATH = '.claude/siui.json'
 
@@ -86,7 +86,7 @@ export async function readConfig($: EngineInterface, root: string): Promise<Game
     if (typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535) made.boardPort = port
     if (Array.isArray(parsed.packs)) {
       made.packs = parsed.packs
-        .filter((one): one is string => typeof one === 'string' && one.trim() !== '' && !one.includes('..'))
+        .filter((one): one is string => typeof one === 'string' && one.trim() !== '' && !one.includes('..') && !isNetwork(one))
         .map(one => one.trim())
         .slice(0, 8)
     }

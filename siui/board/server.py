@@ -100,26 +100,47 @@ def find_remote_code():
     return max(found, key=os.path.getmtime) if found else None
 
 
+def is_network_path(path):
+    """Whether a path names another machine or a device: \\\\host\\share, //host/share, \\\\?\\, \\\\.\\. Even asking whether such
+    a file exists makes Windows sign in to that machine, so a path from a project's files is never followed there."""
+    return str(path).strip().replace("/", "\\").startswith("\\\\")
+
+
+# What a command line of cmd.exe gives a meaning to. VS Code's `code` on Windows is a batch file, and a batch file's
+# arguments pass through cmd.exe whatever the caller quotes: a file named `a&calc.txt` would run calc.
+CMD_SPECIAL = set('&|<>^%!"\r\n')
+
+
 def open_locally(absolute):
-    """Opens a file on a plain desktop (native Windows, macOS, Linux): `code` on PATH in the window last used,
-    else whatever the system binds to the file's type. An error line, or '' when it opened."""
+    """Opens a file on a plain desktop (native Windows, macOS, Linux) in an editor: `code` on PATH, in the window
+    last used. With no editor the file is shown in its folder. It is never handed to the system to "open": that
+    would run a script or a program by its file type, and the path comes from the project's own files. Returns
+    (an error line or '', how it was opened: "editor" or "folder")."""
     code = shutil.which("code")
     if code:
+        if os.name == "nt" and code.lower().endswith((".cmd", ".bat")) and CMD_SPECIAL & set(absolute):
+            return "this file's name holds a character the editor's command cannot take safely; open it from the editor", ""
         try:
             if subprocess.run([code, "-r", absolute], capture_output=True, text=True, timeout=20).returncode == 0:
-                return ""
+                return "", "editor"
         except (OSError, subprocess.TimeoutExpired):
             pass
     try:
         if os.name == "nt":
-            os.startfile(absolute)  # noqa: S606 - the user's own file, opened with its own program
-            return ""
-        opener = shutil.which("open") or shutil.which("xdg-open")
-        if opener and subprocess.run([opener, absolute], capture_output=True, timeout=20).returncode == 0:
-            return ""
+            # Explorer with the file selected: it shows, it does not run.
+            subprocess.Popen(["explorer.exe", "/select," + absolute])
+            return "", "folder"
+        if sys.platform == "darwin":
+            if subprocess.run(["open", "-R", absolute], capture_output=True, timeout=20).returncode == 0:
+                return "", "folder"
+        else:
+            opener = shutil.which("xdg-open")
+            folder = absolute if os.path.isdir(absolute) else os.path.dirname(absolute)
+            if opener and subprocess.run([opener, folder], capture_output=True, timeout=20).returncode == 0:
+                return "", "folder"
     except (OSError, subprocess.TimeoutExpired) as error:
-        return str(error)
-    return "no editor command found"
+        return str(error), ""
+    return "no editor command found: put VS Code's `code` on the PATH to open files from the board", ""
 
 
 def live_sockets(preferred):
@@ -187,7 +208,7 @@ class Board:
         ]
         config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
         for extra in config.get("packs", []) if isinstance(config, dict) else []:
-            if isinstance(extra, str) and extra and ".." not in extra:
+            if isinstance(extra, str) and extra and ".." not in extra and not is_network_path(extra):
                 folders.append((extra if os.path.isabs(extra) else os.path.join(self.root, extra), "project"))
         home = os.path.expanduser("~")
         if home and home != "~":
@@ -574,6 +595,9 @@ class Board:
         """What is on disk for every file the record's decisions name: exists, size, last change."""
         files = {}
         for path in self.source_paths(record):
+            if is_network_path(path):
+                files[path] = {"exists": False}
+                continue
             try:
                 stat = os.stat(self.resolve(path))
                 files[path] = {"exists": True, "size": stat.st_size, "mtime": stat.st_mtime, "isDir": os.path.isdir(self.resolve(path))}
@@ -816,7 +840,8 @@ class Board:
             # The commit is read from the record: nothing but a commit id goes to git or into a prompt.
             if not isinstance(target["commit"], str) or not COMMIT_ID.match(target["commit"]):
                 return {"ok": False, "error": "this save point's commit is not a commit id"}
-            target = dict(target, title=" ".join(str(target.get("title") or "a save point").split())[:60])
+            target = dict(target, title=" ".join(str(target.get("title") or "a save point").split())[:60],
+                          world=target.get("world") if isinstance(target.get("world"), int) else 0, level=str(target.get("level") or ""))
             code, _, _ = self.git("cat-file", "-e", f"{target['commit']}^{{commit}}")
             if code != 0:
                 return {"ok": False, "error": f"commit {target['commit'][:7]} is not in this repository"}
@@ -921,7 +946,11 @@ class Board:
         given = str(body.get("path") or "").strip()
         if not given:
             return {"ok": False, "error": "path is required"}
+        if is_network_path(given):
+            return {"ok": False, "error": "a path on another machine is not opened from the board"}
         absolute = self.resolve(given)
+        if is_network_path(absolute):
+            return {"ok": False, "error": "a path on another machine is not opened from the board"}
         root = os.path.realpath(self.root)
         if not absolute.startswith(root + os.sep):
             record = self.read_record({})
@@ -933,9 +962,9 @@ class Board:
         code = find_remote_code()
         sockets = live_sockets(self.ipc or os.environ.get("VSCODE_IPC_HOOK_CLI")) if code else []
         if not code or not sockets:
-            # No remote window to reach: a plain desktop, where `code` or the system opens the file.
-            error = open_locally(absolute)
-            return {"ok": True} if not error else {"ok": False, "error": error}
+            # No remote window to reach: a plain desktop, where `code` opens the file or its folder shows it.
+            error, how = open_locally(absolute)
+            return {"ok": True, "how": how} if not error else {"ok": False, "error": error}
         last = ""
         for sock in sockets:
             env = dict(os.environ, VSCODE_IPC_HOOK_CLI=sock)

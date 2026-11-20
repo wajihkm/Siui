@@ -1853,10 +1853,15 @@
     return svg + '</svg>';
   }
 
+  /** Opens a file of the project in the editor; with no editor command on this machine, its folder shows it. The board never runs a file. */
+  async function openPath(path) {
+    const opened = await post('/open', { path });
+    if (opened) toast(opened.how === 'folder' ? 'Shown in its folder: no editor command (code) was found' : 'Opened in VS Code');
+  }
   function wireOpen(el) {
-    el.querySelectorAll('a[data-path], .gnode[data-path]').forEach(a => a.addEventListener('click', async e => {
+    el.querySelectorAll('a[data-path], .gnode[data-path]').forEach(a => a.addEventListener('click', e => {
       e.preventDefault();
-      if (await post('/open', { path: a.dataset.path })) toast('Opened in VS Code');
+      openPath(a.dataset.path);
     }));
   }
 
@@ -2129,7 +2134,7 @@
     const text = kind === 'html' ? exportHtml() : kind === 'md' ? exportMarkdown() : exportSvgOf('roadmap');
     if (!text) { toast('Nothing to export yet'); return; }
     const data = await post('/export', { kind, text });
-    if (data && data.ok) toast(`Exported to ${data.path}`, { label: 'Open', onClick: () => post('/open', { path: data.path }) });
+    if (data && data.ok) toast(`Exported to ${data.path}`, { label: 'Open', onClick: () => openPath(data.path) });
   }
   document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', () => { $('exportMenu').removeAttribute('open'); doExport(b.dataset.export); }));
 

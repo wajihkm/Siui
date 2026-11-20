@@ -6,6 +6,11 @@
 import type { EngineInterface } from 'claude-code'
 
 /** Whether a path is absolute or rooted: `/…`, `\…`, `C:\…`, `C:/…`, `C:x` or a `\\server\share`. */
+/** Whether a path names another machine or a device (`\\host\share`, `//host/share`): never followed from a project's files. */
+export function isNetwork(path: string): boolean {
+  return path.trim().replace(/\//g, '\\').startsWith('\\\\')
+}
+
 export function isAbsolute(path: string): boolean {
   return path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:/.test(path)
 }
