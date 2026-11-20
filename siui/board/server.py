@@ -35,6 +35,18 @@ PORT_SPAN = 10  # the ports tried from --port up; an Origin on any of them is th
 MAX_BODY = 1 << 20  # a POST body is at most 1 MB; an export may be 24 MB
 MAX_EXPORT_BODY = 24 << 20
 LOCAL_NAMES = ("127.0.0.1", "localhost")
+# What a prompt to the chat may carry from the record: ids of a fixed shape. A prompt is read as the person's own
+# words, and the record is a file a cloned repository brings with it: a title could hold a sentence for the assistant.
+LEVEL_ID = re.compile(r"^\d+-\d+[ab]?$")
+SLUG_ID = re.compile(r"^[a-z0-9-]{1,60}$")
+COMMIT_ID = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def card_ref(level, key):
+    """A decision named for a prompt, "2-1/timeout"; '' when its level or id is not of the fixed shape."""
+    if isinstance(level, str) and isinstance(key, str) and LEVEL_ID.match(level) and SLUG_ID.match(key):
+        return f"{level}/{key}"
+    return ""
 
 
 def read_json(path, default):
@@ -659,7 +671,9 @@ class Board:
         if title is None:
             return {"ok": False, "error": "no such decision"}
         if notify:
-            self.prompt({"text": f"On the board, my note on {level}/{decision_id} ({title}): {note}"})
+            # The note is the person's own words; the decision is named by its id, its title stays in the record.
+            where = card_ref(level, decision_id) or "a decision in the record"
+            self.prompt({"text": f"On the board, my note on {where}: {note}"})
         return {"ok": True, "notified": notify}
 
     def event(self, body):
@@ -796,9 +810,13 @@ class Board:
             record = self.read_record(fresh=True)
             if not isinstance(record, dict):
                 return {"ok": False, "error": "the record cannot be read now; nothing was changed"}
-            target = next((one for one in record.get("events", []) if one.get("id") == event_id and one.get("kind") == "checkpoint"), None)
+            target = next((one for one in record.get("events", []) if isinstance(one, dict) and one.get("id") == event_id and one.get("kind") == "checkpoint"), None)
             if not target or not target.get("commit"):
                 return {"ok": False, "error": "no such checkpoint"}
+            # The commit is read from the record: nothing but a commit id goes to git or into a prompt.
+            if not isinstance(target["commit"], str) or not COMMIT_ID.match(target["commit"]):
+                return {"ok": False, "error": "this save point's commit is not a commit id"}
+            target = dict(target, title=" ".join(str(target.get("title") or "a save point").split())[:60])
             code, _, _ = self.git("cat-file", "-e", f"{target['commit']}^{{commit}}")
             if code != 0:
                 return {"ok": False, "error": f"commit {target['commit'][:7]} is not in this repository"}
@@ -838,7 +856,7 @@ class Board:
                         handle.write(chat_text)
                 except OSError:
                     pass
-        self.prompt({"text": f"I returned the project to the checkpoint \"{target['title']}\" ({target['commit'][:7]}) from the board; the state before is kept as the git tag {kept}. Re-read the files you rely on before going on."})
+        self.prompt({"text": f"I returned the project to a save point (commit {target['commit'][:7]}) from the board; the state before is kept as the git tag {kept}. Re-read the files you rely on before going on."})
         return {"ok": True, "keptAs": kept}
 
     def back(self, body):
@@ -862,7 +880,9 @@ class Board:
             if isinstance(levels, dict) and levels.get(level) == "open" and not any(d.get("level") == level for d in decisions):
                 levels.pop(level, None)
             write_json(self.record_path(), record)
-        self.prompt({"text": f"Present the card {dropped.get('level', '')}/{dropped.get('id', '')} ({dropped.get('title', '')}) again, with no text before it."})
+        where = card_ref(dropped.get("level"), dropped.get("id"))
+        self.prompt({"text": f"Present the card {where} again, with no text before it." if where
+                     else "On the board I took back the last card I answered: present it again, with no text before it."})
         return {"ok": True, "level": dropped.get("level"), "id": dropped.get("id")}
 
     def off(self, body):
