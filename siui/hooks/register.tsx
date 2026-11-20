@@ -227,7 +227,7 @@ const EXPLAIN_WORDS = new Set(['?', 'explain', 'help', 'why', 'more'])
 const SECTION_ID = 'siui:protocol'
 /** Every verb of /game, once: the command's description and hint and the usage line all read it. */
 const USAGE =
-  'on [pack] | off | status | board [off] | pane [off] | auto [on|off] | checkpoint [title] | fork [level] | road a|b | merge a|b|both | back | reset'
+  'on [pack] | off | status | board [link|off] | pane [off] | auto [on|off] | checkpoint [title] | fork [level] | road a|b | merge a|b|both | back | reset'
 const PANE = 'game-board'
 
 const card = atom({ plugin: 'siui', key: 'card' } as const, null)
@@ -644,7 +644,7 @@ export const register: Register = on => {
       description: `Game mode: decisions as cards. Bare, it opens the board. ${USAGE}`,
       argumentHint: USAGE,
     })
-    await $.command.register({ name: 'siui-board', description: 'Opens the Siui board in the browser (the same as /siui board)', argumentHint: '[off]' })
+    await $.command.register({ name: 'siui-board', description: 'Opens the Siui board in the browser (the same as /siui board)', argumentHint: '[link|off]' })
     // The project root, not the directory the process started in: the store keys and the record go by it.
     const root = await $.session.root()
     config = await readConfig($, root)

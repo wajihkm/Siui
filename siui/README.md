@@ -46,7 +46,9 @@ there opens the explanation. The record grows in `.claude/decisions.json`.
 - `/siui off` leaves the mode.
 - `/siui status` draws the world map: the levels along a path, done, current and ahead,
   with the answers under each, and ends with the next card to present.
-- `/siui board [off]` opens the board in the browser; `off` stops its server.
+- `/siui board [link|off]` opens the board in the browser; `link` prints the address that
+  holds the board's key, for a bookmark or the editor's own browser; `off` stops its
+  server.
 - `/siui pane [off]` opens the same map in a pane beside the chat that redraws after every
   decision (in VS Code the pane sits above the prompt); `off` closes it.
 - `/siui auto [on|off]` switches auto-pilot; without a word it toggles.
@@ -119,7 +121,8 @@ its page in the browser. The page shows, top to bottom:
   saved and sent to the chat as your words), a ▤ button that reads the chat's output that
   followed, Move for a chat, skipped or side-quest decision, the chat turns around the
   step collapsed, the files touched as a tree with folding folders, every file a link that
-  opens it in VS Code, and a form to add a mark by hand.
+  opens it in VS Code (with no `code` command on the machine its folder is shown instead;
+  the board never runs a file), and a form to add a mark by hand.
 - The **side panel** (its toggle is named by the universe: Controller in classic and
   mario, Compass, Helm…): the live card with its options, where you are, the open marks,
   lately, the save point and a box that sends text to the chat as your own words. It
@@ -143,9 +146,18 @@ answer the card, j and k walk the steps, / focuses the send box, f the search, E
 leaves a box; tiles, stops, blocks and rows take focus and Enter opens them. Search in the
 header covers decisions, marks, levels, worlds and chat turns.
 
-The server is the Python 3 standard library, bound to 127.0.0.1; it takes a POST only
-with a JSON content type and a localhost Origin or Host, so no website can post to it.
-Runtime files (the live card, the inboxes, the liveness marks) live under
+The server is the Python 3 standard library, bound to 127.0.0.1, and it answers only to
+the holder of the board's key: a random value in the run folder, which you alone can
+read. Another program or another person on the machine can reach the port, but can
+neither read the board nor answer a card nor write to your chat. `/siui board` opens the
+page with a one-time pass, the page trades it for the key, and the browser keeps the key,
+so the plain address works in that browser from then on; a browser that was never given
+the key says so and names the command. A call also needs a localhost Origin or Host, and
+a POST a JSON content type, so no website can reach it; the page is sent with a content
+security policy that runs its own two scripts and nothing else. What a project's files
+say (the record, a card, a universe file) is drawn as text and never as markup, and a
+prompt the board sends to the chat carries ids, not titles.
+Runtime files (the key, the live card, the inboxes, the liveness marks) live under
 `~/.cache/siui/<project>/`, made 0700 (on Windows `%LOCALAPPDATA%\siui\<project>\`), never in the project. `/siui board off`
 stops the server; it also stops by itself a few minutes after the session ends.
 `boardPort` in the configuration picks the port (5131 by default, then the next nine).
@@ -153,7 +165,10 @@ stops the server; it also stops by itself a few minutes after the session ends.
 To have the board inside VS Code instead of the browser, open it in the Simple Browser:
 the command palette, "Simple Browser: Show", then the address; or a key bound to
 `simpleBrowser.show` with the address as its argument. Nothing on the command line can
-open that view, so the plugin opens the system browser.
+open that view, so the plugin opens the system browser. The Simple Browser needs the key
+once, like any browser: `/siui board link` prints the address that holds it, and that is
+the address to give the palette or the key binding. The link is as good as the key: keep
+it to yourself.
 
 ## Packs
 
@@ -241,8 +256,11 @@ writes by rename. An unreadable record is kept aside under a dated name
 (`decisions.json.broken-*`) and a fresh one starts. The chat log,
 `.claude/chat-log.jsonl`, keeps one line per turn with your words, the answer cut short
 and the level current at the time, so the board shows the turns around each step; past
-2 MB it is archived under a dated name beside it. Both are the project's own; the chat log
-is for the board and need not be committed.
+2 MB it is archived under a dated name beside it. The record is the project's own and is
+meant to be committed. The chat log holds your prompts and is this machine's: it is
+written only while the mode is on, and a `.gitignore` beside it, written once under a
+marked line, keeps it and the record's leftovers out of git; the exports folder has one
+of its own. Deleting a line under the mark is how you commit one of them after all.
 
 A decision also keeps its `cost`: what the session spent, in dollars at API prices, from
 that answer to the next one, read off the session's own ledger at each answered card and
@@ -329,21 +347,34 @@ cost so far, how full the context window is, and each rate-limit window with its
   level `<level>a`; `"road"` switches the disk to road `a` or `b`; `"merge"` keeps `a`,
   `b` or `both`.
 
-A checkpoint is a save point: a commit of the whole tree, made by the tool, by
-`/siui checkpoint [title]`, by the board's "Save point" button, or by `done` after a
-boss is applied; it commits under your own git identity. "Return here" on the board
-commits and tags what is there now (`checkpoints/before-<time>`, so nothing is lost),
-resets the tree to the save point, puts the record and the chat log back, and tells the
-chat.
+A checkpoint is a save point: a commit of the project's folder on your current branch,
+made by the tool, by `/siui checkpoint [title]`, by the board's "Save point" button, or by
+`done` after a boss is applied; it commits under your own git identity. It takes the
+files git tracks. New files are added only after you agreed, once per project: the
+question lists them, and the answer is kept in the run folder, outside the project. A
+file whose name looks like a secret (`.env`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`,
+`credentials.json` and the like) is never added; `git add` it yourself when it belongs.
+In a larger repository the other folders, and what you staged there, are left alone, and
+in the middle of a merge or a rebase no save point is made. "Return here" on the board
+commits and tags what is there now (`checkpoints/before-<time>`, new files too, so
+nothing is lost), resets the tree to the save point, puts the record and the chat log
+back, and tells the chat.
 
 ## Developing
 
-The check is the plugin validator, run from the repository root with the `claude` CLI;
-there is no test runner, linter or CI:
+The checks are the plugin validator, run from the repository root with the `claude` CLI,
+and the tests under `tests/`, which need only Python's standard library:
 
 ```
 claude plugin validate siui --profile directory
+python3 -m unittest discover -s tests
 ```
+
+The tests serve the real page a hostile record, card and universe and walk it in a
+headless browser, looking for anything that came alive; and they start the real server
+and ask it as a caller that is not its page would. The page tests need Chrome, Chromium
+or Edge (`SIUI_TEST_BROWSER` names one) and are skipped without it. The hooks have no
+tests of their own yet, and there is no linter or CI.
 
 While developing, a symlink to `siui/` in a session's `~/.claude/dev-mods/<session>/`
 folder hot-reloads on save. The engine lays its API types in `.claude-plugin/types/` at

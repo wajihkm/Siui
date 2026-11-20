@@ -365,6 +365,15 @@ class SavePoints(unittest.TestCase):
         self.assertEqual(answer["ok"], True, answer)
         self.assertIn("project/src/more.py", self.committed())
 
+    def test_an_export_stays_out_of_git(self):
+        _, answer, _ = self.board.call("POST", "/export", {"kind": "md", "text": "# the roadmap\n"})
+        self.assertEqual(answer["ok"], True, answer)
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "project", answer["path"])))
+        self.assertNotIn("exports", self.git("status", "--short", "--untracked-files=all"))
+        _, saved, _ = self.board.call("POST", "/checkpoint", {"title": "after an export", "world": 1, "level": "1-1", "newFiles": "all"})
+        self.assertEqual(saved["ok"], True, saved)
+        self.assertFalse([one for one in self.committed() if "exports" in one])
+
     def test_tracked_files_only_when_that_was_the_answer(self):
         _, answer, _ = self.board.call("POST", "/checkpoint", {"title": "first", "world": 1, "level": "1-1", "newFiles": "tracked"})
         self.assertEqual(answer["ok"], True, answer)

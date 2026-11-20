@@ -480,6 +480,15 @@ class Board:
             return {"ok": False, "error": "the export is too big"}
         folder = os.path.join(self.root, ".claude", "exports")
         os.makedirs(folder, exist_ok=True)
+        # An export holds the whole record and the chat beside it: it is this machine's file, kept out of git by an
+        # ignore file of the folder's own, written once. Deleting that file is how one chooses to commit exports.
+        ignore = os.path.join(folder, ".gitignore")
+        if not os.path.exists(ignore):
+            try:
+                with open(ignore, "w", encoding="utf-8") as handle:
+                    handle.write("# Siui: exports are files of this machine, not of the repository. Delete this file to commit them.\n*\n")
+            except OSError:
+                pass
         stamp = time.strftime("%Y-%m-%d-%H%M", time.localtime())
         name = f"roadmap-{stamp}.{self.EXPORT_EXT[kind]}"
         path = os.path.join(folder, name)
