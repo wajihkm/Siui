@@ -84,6 +84,10 @@ def page_policy(page):
 LEVEL_ID = re.compile(r"^\d+-\d+[ab]?$")
 SLUG_ID = re.compile(r"^[a-z0-9-]{1,60}$")
 COMMIT_ID = re.compile(r"^[0-9a-f]{7,64}$")
+# Names that look like secrets: a save point never adds one (the hooks hold the same list).
+SECRET_LIKE = re.compile(
+    r"(^|/)\.env($|\.(?!(example|sample|template|dist|defaults?)$))|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)$"
+    r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|(^|/)\.(npmrc|pypirc|netrc|git-credentials)$|(^|/)(credentials?|secrets?)(\.[a-z0-9]+)?$", re.I)
 
 
 def card_ref(level, key):
@@ -881,17 +885,70 @@ class Board:
             return 1, "", str(error)
         return out.returncode, out.stdout.strip(), out.stderr.strip()
 
+    def new_files(self):
+        """The files a save point would add: not tracked, not ignored, under the project's folder."""
+        code, out, _ = self.git("ls-files", "--others", "--exclude-standard", "-z", "--", ".")
+        return [one for one in out.split("\0") if one] if code == 0 else []
+
+    def git_busy(self):
+        """What git is in the middle of, which a commit now would end wrongly; '' when nothing."""
+        code, folder, _ = self.git("rev-parse", "--absolute-git-dir")
+        if code != 0 or not folder:
+            return ""
+        for name, what in (("MERGE_HEAD", "a merge"), ("rebase-merge", "a rebase"), ("rebase-apply", "a rebase"),
+                           ("CHERRY_PICK_HEAD", "a cherry-pick"), ("REVERT_HEAD", "a revert"), ("BISECT_LOG", "a bisect")):
+            if os.path.exists(os.path.join(folder, name)):
+                return what
+        return ""
+
+    def save_mode(self):
+        """How save points treat new files, as the person chose once ("all" or "tracked"); None when not chosen.
+        Kept in the run folder, theirs alone and outside the project, where the plugin reads and writes it too."""
+        made = read_json(self.path("save-points.json"), None)
+        mode = made.get("mode") if isinstance(made, dict) else None
+        return mode if mode in ("all", "tracked") else None
+
+    def commit_folder(self, message, mode):
+        """Commits the project's folder: the files git tracks, and with "all" the new ones too, except any whose name
+        looks like a secret. The commit is of this folder alone: in a larger repository the other folders, and what
+        is staged there, stay as they are. Refused in the middle of a merge or a rebase, which such a commit would
+        conclude. Returns (an error line or '', the secret-looking files left out)."""
+        busy = self.git_busy()
+        if busy:
+            return f"git is in the middle of {busy}; finish it first", []
+        left_out, add = [], ["add", "-u", "--", "."]
+        if mode == "all":
+            left_out = [one for one in self.new_files() if SECRET_LIKE.search(one)]
+            # Past forty such files they are no longer a few keys to step around: only tracked files are taken.
+            if len(left_out) <= 40:
+                add = ["add", "-A", "--", ".", *[f":(exclude,literal){one}" for one in left_out]]
+        code, out, err = self.git(*add)
+        if code != 0:
+            return (err or out).split("\n")[0] or "git add failed", []
+        code, out, err = self.git("commit", "-q", "-m", message, "--", ".")
+        if code != 0 and not re.search(r"nothing to commit|nothing added|no changes added", out + err, re.I):
+            return (err or out).split("\n")[0] or "the commit failed", []
+        return "", left_out
+
     def checkpoint(self, body):
-        """Commits the whole tree as a save point and records it on the stage."""
+        """Commits the project's folder as a save point and records it on the stage. New files are added only when
+        the person agreed: while they have not chosen and there are some, the answer names them and asks."""
         title = str(body.get("title") or "").strip()[:60] or "Checkpoint"
         code, _, _ = self.git("rev-parse", "--is-inside-work-tree")
         if code != 0:
             return {"ok": False, "error": "not a git repository"}
+        if body.get("newFiles") in ("all", "tracked"):
+            write_json(self.path("save-points.json"), {"mode": body["newFiles"], "at": time.time()})
+        mode = self.save_mode()
+        if mode is None:
+            fresh = [one for one in self.new_files() if not SECRET_LIKE.search(one)]
+            if fresh:
+                return {"ok": False, "ask": "newFiles", "files": fresh[:6], "count": len(fresh), "error": "choose how save points treat new files"}
+            mode = "all"
         with self.lock:
-            self.git("add", "-A")
-            code, out, err = self.git("commit", "-q", "-m", f"Checkpoint: {title}")
-            if code != 0 and not re.search(r"nothing to commit|nothing added", out + err, re.I):
-                return {"ok": False, "error": (err or out).split("\n")[0] or "the commit failed"}
+            error, left_out = self.commit_folder(f"Checkpoint: {title}", mode)
+            if error:
+                return {"ok": False, "error": error}
             _, sha, _ = self.git("rev-parse", "HEAD")
             _, branch, _ = self.git("rev-parse", "--abbrev-ref", "HEAD")
             record = self.read_record(fresh=True)
@@ -906,7 +963,7 @@ class Board:
                     one["commit"] = sha
                     one["branch"] = branch or "HEAD"
             write_json(self.record_path(), record)
-        return {"ok": True, "id": made["id"], "commit": sha}
+        return {"ok": True, "id": made["id"], "commit": sha, "leftOut": left_out[:6]}
 
     def revert(self, body):
         """Returns the tree to a checkpoint. What is there now is committed and tagged first, so nothing is lost."""
@@ -933,8 +990,10 @@ class Board:
                     chat_text = handle.read()
             except OSError:
                 pass
-            self.git("add", "-A")
-            self.git("commit", "-q", "-m", f"Before returning to checkpoint: {target['title']}")
+            # What is here now is kept first, new files too: this commit stays behind under a tag, off the branch.
+            error, _ = self.commit_folder(f"Before returning to checkpoint: {target['title']}", "all")
+            if error:
+                return {"ok": False, "error": error}
             stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
             kept = f"checkpoints/before-{stamp}"
             code, _, err = self.git("tag", kept, "HEAD")

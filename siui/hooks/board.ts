@@ -36,6 +36,8 @@ export type BoardPaths = {
   chatFirst: string
   /** The board's key, written by its server: every call of the page carries it. */
   key: string
+  /** How save points treat new files, as the person chose once: `{ "mode": "all" | "tracked" }`; the server reads it too. */
+  saveMode: string
 }
 
 /** What the chat is doing, as the board's header shows it. */
@@ -64,6 +66,7 @@ export async function boardPaths($: EngineInterface, root: string): Promise<Boar
     auto: `${run}/auto.json`,
     chatFirst: `${run}/chat-first.json`,
     key: `${run}/key`,
+    saveMode: `${run}/save-points.json`,
   }
 }
 

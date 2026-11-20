@@ -4,7 +4,7 @@
 // test to read from the page's final markup.
 (async () => {
   const sleep = ms => new Promise(done => setTimeout(done, ms));
-  const out = { done: false, steps: 0, live: [], links: [], pwn: 0, control: false, controlFired: false, tiles: 0, stops: 0, good: 0, style: '', error: '', pageError: '' };
+  const out = { done: false, steps: 0, live: [], links: [], pwn: 0, asked: false, control: false, controlFired: false, tiles: 0, stops: 0, good: 0, style: '', error: '', pageError: '' };
   const pre = document.createElement('pre');
   pre.id = 'hostile-result'; pre.hidden = true;
   document.body.appendChild(pre);
@@ -70,6 +70,15 @@
       out.stops += stops;
       for (const selector of PANEL) await each(selector, 'panel', 2);
     });
+
+    // A save point: a name, then the server's question about new files, whose names are the project's own.
+    const save = document.querySelector('[data-checkpoint]');
+    if (save) {
+      click(save); await sleep(80); note('save point name');
+      const ok = document.querySelector('#ask[open] [value=ok]');
+      if (ok) { ok.click(); await sleep(250); note('save point new files'); out.asked = !!document.querySelector('#ask[open] [value=alt]:not([hidden])'); }
+      closeDialogs();
+    }
 
     // The card, the Now panel, the dialogs, the menus.
     for (const selector of ['#nowtoggle', '#nowhandle', '#agent', '#infoBtn', '[data-new]', '#readyBtn', '#card [data-showcard]', '#card .more', '#exportMenu > summary', '#schemeBtn', '#autoBtn', '#chatFirstBtn']) await each(selector, 'chrome', 2);

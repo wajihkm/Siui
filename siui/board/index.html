@@ -499,7 +499,7 @@
 </footer>
 <div class="toast" id="toast"></div>
 <dialog id="info"><div class="infobody"></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
-<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small primary" value="ok">OK</button></div></form></dialog>
+<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small" value="alt" hidden></button><button class="small primary" value="ok">OK</button></div></form></dialog>
 <dialog id="output"><div class="outbody"><h3 class="title"></h3><div class="user"></div><div class="assistant"></div></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
 <dialog id="move"><form method="dialog" class="askform"><p class="asktext">Move to</p><label class="nwlabel">World<select name="world"></select></label><label class="nwlabel">Stage<select name="level"></select></label><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small primary" value="ok">Move</button></div></form></dialog>
 <dialog id="newworld">
@@ -666,12 +666,14 @@
     if (res.status === 401) needKey();
     return res;
   }
-  async function post(route, body) {
+  async function post(route, body, asks) {
     let data = {};
     try {
       const res = await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
       data = await res.json().catch(() => ({}));
     } catch (e) { data = { error: 'the board server was not reached' }; }
+    // An answer that asks something back is the caller's to show, when the caller said it can.
+    if (data.ok !== true && data.ask && asks) return data;
     if (data.ok !== true) { toast(data.error || 'failed'); return null; }
     return data;
   }
@@ -680,9 +682,16 @@
     const title = await ask('A name for this save point:', { ok: 'Save', value: `Checkpoint ${new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}` });
     if (title === null || !title.trim()) return;
     if (btn) btn.disabled = true;
-    const data = await post('/checkpoint', { title: title.trim(), world, level: level || '' });
+    const body = { title: title.trim(), world, level: level || '' };
+    let data = await post('/checkpoint', body, true);
+    if (data && data.ask === 'newFiles') {
+      // A save point is a commit on the person's branch: files git does not know yet are added only when they agree, once.
+      const files = Array.isArray(data.files) ? data.files.map(String) : [], count = Number(data.count) || files.length;
+      const choice = await ask(`Save points commit this folder to git, on the current branch.\n\n${count} new file${count === 1 ? '' : 's'} would be added: ${files.join(', ')}${count > files.length ? ` and ${count - files.length} more` : ''}.\n\nFiles that look like secrets (.env, keys) are never added.`, { ok: 'Add new files', alt: 'Tracked files only' });
+      data = choice === false ? null : await post('/checkpoint', { ...body, newFiles: choice === 'alt' ? 'tracked' : 'all' });
+    }
     if (btn) btn.disabled = false;
-    if (data) toast(`Save point at ${(data.commit || '').slice(0, 7)}`);
+    if (data) toast(`Save point at ${(data.commit || '').slice(0, 7)}${Array.isArray(data.leftOut) && data.leftOut.length ? ` · left out, as they look like secrets: ${data.leftOut.join(', ')}` : ''}`);
   }
 
   /** A text size in an SVG: never below 12 px, the small labels scaled with the page's base size (the factor is read once per drawing). */
@@ -993,16 +1002,17 @@
     renderUniverseMenu();
     if (state) render(true);
   }
-  /** An in-page confirm (no `value`) or prompt (a `value` to edit): the browser's own are blocked inside VS Code's Simple Browser. */
-  function ask(text, { ok = 'OK', value = null } = {}) {
+  /** An in-page confirm (no `value`) or prompt (a `value` to edit): the browser's own are blocked inside VS Code's Simple Browser. With `alt`, a confirm has a second choice and resolves 'alt' for it. */
+  function ask(text, { ok = 'OK', value = null, alt = '' } = {}) {
     return new Promise(resolve => {
-      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]');
+      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]'), altBtn = d.querySelector('[value=alt]');
       const isPrompt = value !== null;
       d.querySelector('.asktext').textContent = text;
       okBtn.textContent = ok;
+      altBtn.hidden = !alt || isPrompt; altBtn.textContent = alt;
       input.hidden = !isPrompt;
       if (isPrompt) input.value = value;
-      const onClose = () => { d.removeEventListener('close', onClose); resolve(d.returnValue === 'ok' ? (isPrompt ? input.value : true) : (isPrompt ? null : false)); };
+      const onClose = () => { d.removeEventListener('close', onClose); resolve(d.returnValue === 'ok' ? (isPrompt ? input.value : true) : d.returnValue === 'alt' && !isPrompt ? 'alt' : (isPrompt ? null : false)); };
       d.addEventListener('close', onClose);
       d.returnValue = '';
       d.showModal();

@@ -61,8 +61,10 @@ def record():
 class Running:
     """The real server on a project and a run folder of the test's own."""
 
-    def __init__(self):
-        self.root = tempfile.mkdtemp(prefix="siui-test-project-")
+    def __init__(self, inside=None):
+        """`inside`: a folder made by the caller; the project is then its subfolder `project`, as in a larger repository."""
+        self.outer = inside or tempfile.mkdtemp(prefix="siui-test-project-")
+        self.root = os.path.join(self.outer, "project") if inside else self.outer
         self.run = tempfile.mkdtemp(prefix="siui-test-run-")
         os.makedirs(os.path.join(self.root, ".claude"))
         with open(os.path.join(self.root, ".claude", "decisions.json"), "w", encoding="utf-8") as handle:
@@ -132,7 +134,7 @@ class Running:
         except subprocess.TimeoutExpired:
             self.process.kill()
         self.process.stderr.close()
-        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.outer, ignore_errors=True)
         shutil.rmtree(self.run, ignore_errors=True)
 
 
@@ -296,6 +298,115 @@ class BoardServer(unittest.TestCase):
         _, answer, _ = self.board.call("POST", "/open", {"path": "/etc/hostname"})
         self.assertEqual(answer["ok"], False)
         self.assertIn("outside the project", answer["error"])
+
+
+@unittest.skipUnless(shutil.which("git"), "git is not installed")
+class SavePoints(unittest.TestCase):
+    """A save point is a commit on the person's own branch: it takes the project's folder and nothing else, new files
+    only when they agreed, never a file that looks like a secret, and nothing in the middle of a merge."""
+
+    def git(self, *args, cwd=None):
+        done = subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", *args],
+                              cwd=cwd or self.repo, capture_output=True, text=True, timeout=60)
+        return done.stdout.strip()
+
+    def write(self, path, text):
+        full = os.path.join(self.repo, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp(prefix="siui-test-repo-")
+        self.git("init", "-q", "-b", "main")
+        self.board = Running(inside=self.repo)
+        self.write("project/src/app.py", "print(1)\n")
+        self.write("outside/notes.txt", "one\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "start")
+        # Since the start: a tracked file changed, new files of both sorts, and work elsewhere in the repository.
+        self.write("project/src/app.py", "print(2)\n")
+        self.write("project/src/new.py", "new\n")
+        self.write("project/.env", "TOKEN=secret\n")
+        self.write("project/.env.example", "TOKEN=\n")
+        self.write("project/deploy/server.pem", "key\n")
+        self.write("outside/notes.txt", "two\n")
+        self.write("outside/untracked.txt", "x\n")
+        self.git("add", "outside/notes.txt")
+
+    def tearDown(self):
+        self.board.close()
+
+    def committed(self, ref="HEAD"):
+        return set(self.git("show", "--name-only", "--format=", ref).split("\n")) - {""}
+
+    def test_new_files_wait_for_a_yes_and_secrets_never_go(self):
+        head = self.git("rev-parse", "HEAD")
+        status, answer, _ = self.board.call("POST", "/checkpoint", {"title": "first", "world": 1, "level": "1-1"})
+        self.assertEqual((status, answer["ok"], answer["ask"]), (200, False, "newFiles"))
+        self.assertEqual(sorted(answer["files"]), [".env.example", "src/new.py"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head, "a commit was made before the person agreed")
+        _, answer, _ = self.board.call("POST", "/checkpoint", {"title": "first", "world": 1, "level": "1-1", "newFiles": "all"})
+        self.assertEqual(answer["ok"], True, answer)
+        self.assertEqual(sorted(answer["leftOut"]), [".env", "deploy/server.pem"])
+        files = self.committed()
+        self.assertIn("project/src/app.py", files)
+        self.assertIn("project/src/new.py", files)
+        self.assertIn("project/.env.example", files)
+        self.assertNotIn("project/.env", files)
+        self.assertNotIn("project/deploy/server.pem", files)
+        # The rest of the repository is not this project's to commit: what was staged there is still only staged.
+        self.assertFalse([one for one in files if one.startswith("outside/")], files)
+        self.assertIn("M  outside/notes.txt", self.git("status", "--short"))
+        self.assertIn("?? outside/untracked.txt", self.git("status", "--short"))
+        # The choice is kept: the next save point does not ask.
+        self.write("project/src/more.py", "more\n")
+        _, answer, _ = self.board.call("POST", "/checkpoint", {"title": "second", "world": 1, "level": "1-1"})
+        self.assertEqual(answer["ok"], True, answer)
+        self.assertIn("project/src/more.py", self.committed())
+
+    def test_tracked_files_only_when_that_was_the_answer(self):
+        _, answer, _ = self.board.call("POST", "/checkpoint", {"title": "first", "world": 1, "level": "1-1", "newFiles": "tracked"})
+        self.assertEqual(answer["ok"], True, answer)
+        files = self.committed()
+        self.assertIn("project/src/app.py", files)
+        self.assertNotIn("project/src/new.py", files)
+        self.assertNotIn("project/.env", files)
+        self.assertTrue(os.path.exists(os.path.join(self.repo, "project", "src", "new.py")))
+
+    def test_no_save_point_in_the_middle_of_a_merge(self):
+        self.git("stash", "-q", "-u")
+        self.git("switch", "-q", "-c", "side")
+        self.write("project/src/app.py", "print('side')\n")
+        self.git("commit", "-q", "-am", "side")
+        self.git("switch", "-q", "main")
+        self.write("project/src/app.py", "print('main')\n")
+        self.git("commit", "-q", "-am", "main")
+        self.git("merge", "side")
+        self.assertTrue(os.path.exists(os.path.join(self.repo, ".git", "MERGE_HEAD")))
+        head = self.git("rev-parse", "HEAD")
+        _, answer, _ = self.board.call("POST", "/checkpoint", {"title": "mid-merge", "world": 1, "level": "1-1", "newFiles": "all"})
+        self.assertEqual(answer["ok"], False)
+        self.assertIn("in the middle of a merge", answer["error"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertTrue(os.path.exists(os.path.join(self.repo, ".git", "MERGE_HEAD")), "the merge was concluded by a save point")
+
+    def test_a_return_keeps_what_was_there_under_a_tag(self):
+        _, saved, _ = self.board.call("POST", "/checkpoint", {"title": "good", "world": 1, "level": "1-1", "newFiles": "all"})
+        self.assertEqual(saved["ok"], True, saved)
+        self.write("project/src/app.py", "print(3)\n")
+        self.write("project/src/later.py", "later\n")
+        _, back, _ = self.board.call("POST", "/revert", {"id": saved["id"], "world": 1, "level": "1-1"})
+        self.assertEqual(back["ok"], True, back)
+        with open(os.path.join(self.repo, "project", "src", "app.py"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "print(2)\n")
+        self.assertRegex(back["keptAs"], r"^checkpoints/before-")
+        kept = self.committed(back["keptAs"])
+        self.assertIn("project/src/app.py", kept)
+        self.assertIn("project/src/later.py", kept)
+        self.assertEqual(self.git("show", f"{back['keptAs']}:project/src/app.py"), "print(3)")
+        self.assertIn(f"commit {saved['commit'][:7]}", self.board.prompts()[-1])
+        self.assertNotIn("good", self.board.prompts()[-1])
 
 
 class OpeningFiles(unittest.TestCase):

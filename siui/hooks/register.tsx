@@ -31,8 +31,8 @@ import {
 } from './board'
 import { drawCard } from './card'
 import { appendChat } from './chat'
-import { forkRoads, mergeRoads, saveCheckpoint, switchRoad } from './checkpoint'
-import type { RunFork } from './checkpoint'
+import { forkRoads, looksSecret, mergeRoads, newFiles, saveCheckpoint, switchRoad } from './checkpoint'
+import type { RunFork, SaveMode } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
 import { setWords } from './words'
@@ -97,6 +97,49 @@ function opensWorld(record: GameRecord, current: GameCard): boolean {
   return current.pack !== undefined && current.world > 0 && !hasWorld(record, current.world)
 }
 
+/**
+ * How save points treat new files in this project. A save point is a commit
+ * on the person's branch, so files git does not know yet are added only after
+ * they agreed, once: the question lists them, and the answer is kept in the
+ * run folder (theirs alone, outside the project, so a cloned repository
+ * cannot answer for them), where the board's server reads it too. With
+ * nothing new there is nothing to ask. Undefined when they left the question
+ * or nobody is there to ask: no save point then.
+ */
+async function saveModeFor($: EngineInterface, root: string): Promise<SaveMode | undefined> {
+  const paths = await boardPaths($, root)
+  try {
+    const kept = (JSON.parse(await $.fs.read(paths.saveMode)) as { mode?: unknown }).mode
+    if (kept === 'all' || kept === 'tracked') return kept
+  } catch {
+    // not chosen yet
+  }
+  // Files that look like secrets are never added, so they are nothing to ask about.
+  const fresh = (await newFiles($, root)).filter(one => !looksSecret(one))
+  if (fresh.length === 0) return 'all'
+  const shown = `${fresh.slice(0, 6).join(', ')}${fresh.length > 6 ? ` and ${fresh.length - 6} more` : ''}`
+  const question = `Save points commit this folder to git, on the current branch. ${fresh.length} new file${fresh.length === 1 ? '' : 's'} would be added: ${shown}. Files that look like secrets (.env, keys) are never added. Add new files to save points?`
+  ownAsk = true
+  try {
+    const answer = await $.ui.ask(question, { options: ['Add new files', 'Tracked files only'], header: 'Save points' })
+    const mode: SaveMode | undefined = answer === 'Add new files' ? 'all' : answer === 'Tracked files only' ? 'tracked' : undefined
+    if (mode !== undefined && (await launch($, ['folder', paths.run])).exitCode === 0) {
+      await $.fs.write(paths.saveMode, `${JSON.stringify({ mode, at: Date.now() })}\n`)
+    }
+
+    return mode
+  } catch {
+    return undefined
+  } finally {
+    ownAsk = false
+  }
+}
+const NOT_ASKED = 'the question about new files was left unanswered'
+/** A line for the files a save point stepped around, or ''. */
+function leftOutLine(leftOut: readonly string[]): string {
+  return leftOut.length === 0 ? '' : ` Left out, as they look like secrets: ${leftOut.slice(0, 4).join(', ')}${leftOut.length > 4 ? ` and ${leftOut.length - 4} more` : ''}.`
+}
+
 /** Forks a stage of the open run: a checkpoint, two branches, road a on disk; the record remembers. */
 async function doFork($: EngineInterface, root: string, recordRel: string, levelGiven: string): Promise<{ text: string; fork?: RunFork }> {
   const record = await readRecord($, root, recordRel)
@@ -105,7 +148,9 @@ async function doFork($: EngineInterface, root: string, recordRel: string, level
   const level = stageOf(levelGiven)
   if (!/^\d+-\d+$/.test(level) || level === '0-0') return { text: 'Say which stage to fork, like 3-3.' }
   if (openFork(run)) return { text: `A fork is already open at ${openFork(run)?.level}; merge it first.` }
-  const made = await forkRoads($, root, level)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No fork: ${NOT_ASKED}.` }
+  const made = await forkRoads($, root, level, mode)
   if ('error' in made) return { text: `No fork: ${made.error}.` }
   run.roads = { ...(run.roads ?? {}), [level]: made }
   run.levels[`${level}a`] = 'open'
@@ -134,7 +179,9 @@ async function doRoad($: EngineInterface, root: string, recordRel: string, road:
   const fork = levelGiven ? run.roads?.[stageOf(levelGiven)] : openFork(run)
   if (!fork || fork.merged !== undefined) return { text: 'No open fork to switch.', ok: false }
   if (fork.onDisk === road) return { text: `Road ${road} of ${fork.level} is on disk already.`, ok: true }
-  const switched = await switchRoad($, root, fork, road)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No switch: ${NOT_ASKED}.`, ok: false }
+  const switched = await switchRoad($, root, fork, road, mode)
   if ('error' in switched) return { text: `No switch: ${switched.error}.`, ok: false }
   // The tree now holds the other road's record: join what this road knew into it.
   const after = await readRecord($, root, recordRel)
@@ -164,7 +211,9 @@ async function doMerge($: EngineInterface, root: string, recordRel: string, keep
   if (!run) return { text: 'No world is open.', ok: false }
   const fork = levelGiven ? run.roads?.[stageOf(levelGiven)] : openFork(run)
   if (!fork || fork.merged !== undefined) return { text: 'No open fork to merge.', ok: false }
-  const merged = await mergeRoads($, root, fork, keep)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No merge: ${NOT_ASKED}.`, ok: false }
+  const merged = await mergeRoads($, root, fork, keep, mode)
   if ('error' in merged) return { text: `No merge: ${merged.error}.`, ok: false }
   const kept: 'a' | 'b' = keep === 'b' ? 'b' : 'a'
   run.roads = { ...(run.roads ?? {}), [fork.level]: { ...fork, onDisk: kept, merged: keep, tag: merged.tag } }
@@ -467,7 +516,9 @@ async function runCommand($: EngineInterface, e: { args: string }) {
 
   if (word === 'checkpoint') {
     const title = rest.join(' ').trim() || `Checkpoint ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`
-    const saved = await saveCheckpoint($, root, title)
+    const mode = await saveModeFor($, root)
+    if (mode === undefined) return { text: `No checkpoint: ${NOT_ASKED}.` }
+    const saved = await saveCheckpoint($, root, title, mode)
     if ('error' in saved) return { text: `No checkpoint: ${saved.error}.` }
     const record = await readRecord($, root, config.record)
     const run = openRun(record) ?? lastWorldRun(record)
@@ -491,7 +542,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     await writeRecord($, root, record, config.record)
     await update($, history, list => [...list].slice(-200))
 
-    return { text: `Checkpoint saved: ${title} (${saved.commit.slice(0, 7)} on ${saved.branch}). Return to it from the board.` }
+    return { text: `Checkpoint saved: ${title} (${saved.commit.slice(0, 7)} on ${saved.branch}). Return to it from the board.${leftOutLine(saved.leftOut)}` }
   }
 
   if (word === 'pane') {
@@ -897,7 +948,9 @@ export const register: Register = on => {
       event.to = { world: to.world, ...(isLevel(to.level) ? { level: to.level } : {}) }
     } else if (existing?.to) event.to = existing.to
     if (kind === 'checkpoint' && !existing) {
-      const saved = await saveCheckpoint($, root, title)
+      const mode = await saveModeFor($, root)
+      if (mode === undefined) return { result: JSON.stringify({ recorded: false, error: `no save point: ${NOT_ASKED}` }) }
+      const saved = await saveCheckpoint($, root, title, mode)
       if ('error' in saved) return { result: JSON.stringify({ recorded: false, error: saved.error }) }
       event.commit = saved.commit
       event.branch = saved.branch
@@ -1234,8 +1287,12 @@ export const register: Register = on => {
     await update($, progress, () => null)
     $.ui.toast(`World ${run2.world} complete`)
     // The applied world is a save point: a checkpoint at the commit the model just made.
-    const saved = await saveCheckpoint($, root, `World ${run2.world} applied`)
+    // No answer about new files, or git in the middle of a merge: the world is closed all the same, without a save point.
+    const mode = await saveModeFor($, root)
+    const saved = mode === undefined ? { error: NOT_ASKED } : await saveCheckpoint($, root, `World ${run2.world} applied`, mode)
+    if ('error' in saved) $.ui.toast(`No save point for world ${run2.world}: ${saved.error}`)
     if (!('error' in saved)) {
+      if (saved.leftOut.length > 0) $.ui.toast(`Save point made.${leftOutLine(saved.leftOut)}`)
       const now = new Date().toISOString()
       const bossLevel = (run2.plan ?? []).map(one => one.level).pop() ?? Object.keys(run2.levels).pop() ?? `${run2.world}-4`
       putEvent(record, {

@@ -98,6 +98,10 @@ class Board:
                     self.send({"ok": True, "path": hostile.payload("p.export.path")})
                 elif path == "/prompt":
                     self.send({"ok": True})
+                elif path == "/checkpoint" and "newFiles" not in body:
+                    # The question about new files: their names are the project's own.
+                    self.send({"ok": False, "ask": "newFiles", "files": [hostile.payload("p.new.1"), hostile.payload("p.new.2")],
+                               "count": hostile.payload("p.new.count"), "error": hostile.payload("p.new.error")})
                 else:
                     # An error's words come from the server; a hostile one must stay words too.
                     self.send({"ok": False, "error": hostile.payload("p.error")})
@@ -202,6 +206,7 @@ class HostilePage(unittest.TestCase):
         notes, board = walk_page(BROWSER, hostile.text_state(), hostile.hostile_universe())
         self.check(notes, board, drawn=True)
         self.assertGreater(notes["good"], 0, "an honest drawing of the universe was not drawn")
+        self.assertTrue(notes["asked"], "the question about a save point's new files was not shown")
         self.assertEqual(sorted(board.exports), ["html", "md", "svg"], "the three exports did not all run")
 
     def test_wrong_types_where_numbers_and_dates_belong(self):
