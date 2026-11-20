@@ -80,9 +80,13 @@ def start_key(path):
     return new_key(path)
 
 
-def peer_uid(client, server_port):
-    """The user who owns the other end of a connection from this machine, where the system says: on Linux the
-    kernel's table of connections names it. None when it cannot be told (another system, a relay in between)."""
+def peer_row(client, server_port):
+    """The other end of a connection from this machine, as the kernel's table of connections on Linux shows it: (the
+    user who owns it, whether it is still connected). None when there is no row for it (another system, a relay
+    from outside this system's own network, a caller already gone).
+
+    The second part matters as much as the first: once a caller closes its end, its row stays for a moment and is
+    nobody's, which the kernel writes as the system's own user."""
     host, port = client[0], client[1]
     try:
         local = "%08X:%04X" % (struct.unpack("=I", socket.inet_aton(host))[0], port)
@@ -91,7 +95,7 @@ def peer_uid(client, server_port):
             for row in handle:
                 parts = row.split()
                 if len(parts) > 7 and parts[1] == local and parts[2] == there:
-                    return int(parts[7])
+                    return int(parts[7]), parts[3] == "01"
     except (OSError, ValueError, struct.error):
         return None
     return None
@@ -99,8 +103,42 @@ def peer_uid(client, server_port):
 
 def is_foreign(uid, mine):
     """Whether a call is known to come from another user of this machine. The system's own user (0) is not held
-    apart: it reads every file here anyway, and a relay such as WSL's runs as it."""
-    return uid is not None and mine is not None and uid not in (mine, 0)
+    apart: it reads every file here anyway, and a relay such as WSL's runs as it. A server run as that user holds
+    nobody apart: there the key alone decides."""
+    return uid is not None and mine not in (None, 0) and uid not in (mine, 0)
+
+
+def has_hung_up(connection):
+    """Whether the caller has already closed its end. A browser waits for its answer; a caller that hangs up at once
+    leaves no row in the kernel's table for `peer_uid` to read, and is treated as one that meant to."""
+    try:
+        connection.setblocking(False)
+        try:
+            return connection.recv(1, socket.MSG_PEEK) == b""
+        finally:
+            connection.setblocking(True)
+    except (BlockingIOError, InterruptedError):
+        return False  # nothing more to read, and still there
+    except OSError:
+        return True  # reset
+
+
+def foreign_caller(handler, port):
+    """Whether a call is to be refused as another user's, on a system that names the owner of a connection (Linux).
+    A caller still connected has a row, and the row's owner decides. A caller that has closed its end is refused
+    whoever it was: its row is nobody's by then, or gone, and a browser never leaves before its answer. With no row
+    and the caller still there, it is a relay from outside this system's own network (WSL's, a forwarded port).
+    So the check cannot be passed by not being looked at."""
+    mine = os.getuid() if hasattr(os, "getuid") else None
+    if mine in (None, 0) or not os.path.exists("/proc/net/tcp"):
+        return False
+    row = peer_row(handler.client_address, port)
+    if row is not None:
+        uid, connected = row
+        return not connected or is_foreign(uid, mine)
+    # No row: give a reset on its way the moment to land, then see whether anyone is still there.
+    time.sleep(0.02)
+    return has_hung_up(handler.connection)
 
 
 def page_policy(page):
@@ -119,11 +157,19 @@ SLUG_ID = re.compile(r"^[a-z0-9-]{1,60}$")
 COMMIT_ID = re.compile(r"^[0-9a-f]{7,64}$")
 # Names that look like secrets: a save point never adds one (the hooks hold the same list).
 SECRET_LIKE = re.compile(
-    r"(^|/)\.env($|[._-](?!(example|sample|template|dist|defaults?)$))|(^|/)\.envrc$|\.env$"
+    r"(^|/)\.env($|[._-])|(^|/)\.envrc$|\.env$"
     r"|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\.tfstate\.backup$"
-    r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)(?![^/]*\.pub$)[^/]*$"
+    r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$"
     r"|(^|/)\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\.docker/config\.json$|(^|/)kubeconfig$"
-    r"|(^|/)(credentials?|secrets?|client[-_]secret[^/]*|service[-_]?account[^/]*)(\.[a-z0-9]+)?$", re.I)
+    r"|(^|/)(credentials?|secrets?)(\.[a-z0-9]+)?$"
+    r"|(^|/)(client[-_]secret|service[-_]?account)[^/]*\.(json|ya?ml|p12|pem|key|txt)$", re.I)
+# What the list above would take but is made to be shared: a sample of an env file, a public key.
+SHARED_LIKE = re.compile(r"(^|/)\.env[._-](example|sample|template|dist|defaults?)$|(^|/)(example|sample|template)[^/]*\.env$|\.pub$", re.I)
+
+
+def looks_secret(path):
+    """Whether a file's name looks like a secret's: a save point never adds such a file."""
+    return bool(SECRET_LIKE.search(path)) and not SHARED_LIKE.search(path)
 
 
 def card_ref(level, key):
@@ -139,6 +185,12 @@ def read_json(path, default):
             return json.load(handle)
     except (OSError, ValueError):
         return default
+
+
+def open_new(path):
+    """Opens a file that must not be there yet, for writing: never an existing one, never through a link."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    return os.fdopen(os.open(path, flags, 0o644), "w", encoding="utf-8")
 
 
 def write_json(path, data):
@@ -262,7 +314,9 @@ class Board:
         self.root = os.path.abspath(args.root)
         self.run = os.path.abspath(args.run)
         self.record = args.record
-        self.chat = args.chat
+        # The chat log is one file whose name ends in .jsonl. Its path is kept out of every commit, so a path the
+        # configuration could aim at a folder of sources would leave that folder out of every save point.
+        self.chat = args.chat if isinstance(args.chat, str) and args.chat.endswith(".jsonl") and ".." not in args.chat else ".claude/chat-log.jsonl"
         self.ipc = args.ipc or ""
         self.started = time.time()
         self.ports = range(args.port, args.port + PORT_SPAN)
@@ -332,15 +386,16 @@ class Board:
         # shared between projects belong in the home folder's skill.
         given = config.get("packs") if isinstance(config, dict) else None
         for extra in given if isinstance(given, list) else []:
-            if isinstance(extra, str) and extra and ".." not in extra and not is_network_path(extra) and not os.path.isabs(extra):
-                folder = os.path.join(self.root, extra)
-                if self.inside(folder):
-                    folders.append((folder, "project"))
+            if isinstance(extra, str) and extra and ".." not in extra and "\0" not in extra and not is_network_path(extra) and not os.path.isabs(extra):
+                folders.append((os.path.join(self.root, extra), "project"))
         home = os.path.expanduser("~")
         if home and home != "~":
             folders.append((os.path.join(home, ".claude", "skills", "decision-cards", "packs"), "home"))
         seen, out = set(), []
         for folder, source in folders:
+            # A folder of the project's own packs lies in the project, links followed: the skill's folder as well.
+            if source == "project" and not self.inside(folder):
+                continue
             real = os.path.realpath(folder)
             if real in seen or not os.path.isdir(real):
                 continue
@@ -530,9 +585,9 @@ class Board:
         # An export holds the whole record and the chat beside it: it is this machine's file, kept out of git by an
         # ignore file of the folder's own, written once. Deleting that file is how one chooses to commit exports.
         ignore = os.path.join(folder, ".gitignore")
-        if not os.path.exists(ignore):
+        if not os.path.lexists(ignore):
             try:
-                with open(ignore, "w", encoding="utf-8") as handle:
+                with open_new(ignore) as handle:
                     handle.write("# Siui: exports are files of this machine, not of the repository. Delete this file to commit them.\n*\n")
             except OSError:
                 pass
@@ -542,7 +597,9 @@ class Board:
         if os.path.islink(path) or not self.inside(path):
             return {"ok": False, "error": "the export's file leads out of the project; nothing was written"}
         try:
-            with open(path, "w", encoding="utf-8") as handle:
+            if os.path.lexists(path):
+                os.remove(path)
+            with open_new(path) as handle:
                 handle.write(text)
         except OSError as error:
             return {"ok": False, "error": str(error)}
@@ -969,15 +1026,16 @@ class Board:
     def chat_files(self):
         """The chat log and its dated archives, as they are on disk: this machine's files, never a commit's."""
         log = os.path.join(self.root, self.chat)
-        stem = log[:-6] if log.endswith(".jsonl") else log
-        return [one for one in [log, *sorted(glob.glob(glob.escape(stem) + "-*.jsonl"))] if os.path.isfile(one)]
+        return [one for one in [log, *sorted(glob.glob(glob.escape(log[:-6]) + "-*.jsonl"))] if os.path.isfile(one)]
 
     def keep_out(self, cwd):
         """The pathspecs that keep the chat log and its archives out of a commit, whether git tracks them or not: the
         log holds the person's prompts, and a repository can ship one already tracked."""
-        log = os.path.relpath(os.path.join(self.root, self.chat), cwd).replace(os.sep, "/")
-        stem = log[:-6] if log.endswith(".jsonl") else log
-        return [f":(exclude,literal){log}", ":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", stem) + "-*.jsonl"]
+        full = os.path.join(self.root, self.chat)
+        if os.path.isdir(full) or not self.inside(full):
+            return []
+        log = os.path.relpath(full, cwd).replace(os.sep, "/")
+        return [f":(exclude,literal){log}", ":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", log[:-6]) + "-*.jsonl"]
 
     def git_busy(self):
         """What git is in the middle of, which a commit now would end wrongly; '' when nothing."""
@@ -1015,7 +1073,7 @@ class Board:
         nothing = r"nothing to commit|nothing added|no changes added|did not match any file"
         left_out, add = [], ["add", "-u", "--", ".", *aside]
         if mode == "all":
-            left_out = [one for one in self.new_files(cwd) if SECRET_LIKE.search(one)]
+            left_out = [one for one in self.new_files(cwd) if looks_secret(one)]
             # Past forty such files they are no longer a few keys to step around: only tracked files are taken.
             if len(left_out) <= 40:
                 add = ["add", "-A", "--", ".", *aside, *[f":(exclude,literal){one}" for one in left_out]]
@@ -1038,7 +1096,7 @@ class Board:
             write_json(self.path("save-points.json"), {"mode": body["newFiles"], "at": time.time()})
         mode = self.save_mode()
         if mode is None:
-            fresh = [one for one in self.new_files() if not SECRET_LIKE.search(one)]
+            fresh = [one for one in self.new_files() if not looks_secret(one)]
             if fresh:
                 return {"ok": False, "ask": "newFiles", "files": fresh[:6], "count": len(fresh), "error": "choose how save points treat new files"}
             mode = "all"
@@ -1046,7 +1104,9 @@ class Board:
             error, left_out = self.commit_folder(f"Checkpoint: {title}", mode)
             if error:
                 return {"ok": False, "error": error}
-            _, sha, _ = self.git("rev-parse", "HEAD")
+            code, sha, _ = self.git("rev-parse", "--verify", "-q", "HEAD^{commit}")
+            if code != 0 or not COMMIT_ID.match(sha):
+                return {"ok": False, "error": "nothing is committed in this repository yet, so there is no commit to save as"}
             _, branch, _ = self.git("rev-parse", "--abbrev-ref", "HEAD")
             record = self.read_record(fresh=True)
             if not isinstance(record, dict):
@@ -1097,10 +1157,32 @@ class Board:
             code_now, known, _ = self.git("ls-files", "-z", cwd=top)
             if code != 0 or code_now != 0:
                 return {"ok": False, "error": "git could not list the save point's files; nothing was changed"}
-            known = set(known.split("\0"))
+            # Safe: what git tracks now, and the new files the commit made first will take.
+            safe = set(known.split("\0")) | {one for one in self.new_files(top) if not looks_secret(one)}
             own = {os.path.realpath(self.record_path()), *[os.path.realpath(one) for one in chat_kept]}
-            at_risk = [one for one in held.split("\0") if one and one not in known and os.path.lexists(os.path.join(top, one))
-                       and os.path.realpath(os.path.join(top, one)) not in own]
+            at_risk, seen = [], {}
+
+            def in_the_way(path):
+                """A file or a link on disk at this path, which neither git nor this route keeps."""
+                if path not in seen:
+                    full = os.path.join(top, path)
+                    seen[path] = (path not in safe and os.path.lexists(full) and (os.path.islink(full) or not os.path.isdir(full))
+                                  and os.path.realpath(full) not in own)
+                return seen[path]
+
+            for one in held.split("\0"):
+                if not one:
+                    continue
+                # The path itself, a folder of other things at that path, or a file where the save point has a folder.
+                parts = one.split("/")
+                full = os.path.join(top, one)
+                if in_the_way(one) or (one not in safe and os.path.isdir(full) and not os.path.islink(full)):
+                    at_risk.append(one)
+                else:
+                    blocked = next(("/".join(parts[:i]) for i in range(1, len(parts)) if in_the_way("/".join(parts[:i]))), None)
+                    if blocked:
+                        at_risk.append(blocked)
+            at_risk = sorted(set(at_risk))
             if at_risk:
                 names = ", ".join(at_risk[:3]) + (" and more" if len(at_risk) > 3 else "")
                 return {"ok": False, "error": f"the save point would write over files git does not hold now ({names}); move them away first"}
@@ -1250,16 +1332,20 @@ def make_handler(board):
             pass
 
         def send_bytes(self, payload, kind, status=200, headers=()):
-            self.send_response(status)
-            self.send_header("Content-Type", kind)
-            self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            for name, value in headers:
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(payload)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                for name, value in headers:
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The caller left before its answer: nothing to send, and nothing worth a line in the log.
+                self.close_connection = True
 
         def send_json(self, data, status=200):
             # Data is for the page alone: no other site may load it as a script or a picture.
@@ -1274,7 +1360,7 @@ def make_handler(board):
                 return False
             # Another user of this machine, known as such, is refused whatever the call carries: a pass read off a
             # command line, or a key come by some other way, is of no use to them.
-            if is_foreign(peer_uid(self.client_address, board.port), os.getuid() if hasattr(os, "getuid") else None):
+            if foreign_caller(self, board.port):
                 return False
             origin = self.headers.get("Origin")
             if origin is not None:

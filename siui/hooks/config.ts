@@ -81,7 +81,8 @@ export async function readConfig($: EngineInterface, root: string): Promise<Game
       }
     }
     const chatLog = typeof parsed.chatLog === 'string' ? parsed.chatLog.trim() : ''
-    if (chatLog !== '' && !chatLog.includes('..') && !isAbsolute(chatLog)) made.chatLog = chatLog
+    // One file whose name ends in .jsonl: its path is kept out of every commit, so it must not be a folder of sources.
+    if (chatLog !== '' && !chatLog.includes('..') && !isAbsolute(chatLog) && chatLog.endsWith('.jsonl')) made.chatLog = chatLog
     const port = parsed.boardPort
     if (typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535) made.boardPort = port
     if (Array.isArray(parsed.packs)) {

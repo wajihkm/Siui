@@ -313,8 +313,8 @@ cost so far, how full the context window is, and each rate-limit window with its
 ```
 
 - `name` is the project's name in the board's header; left out, the folder's name.
-- `record` moves the decisions file; `chatLog` moves the chat log; both stay inside the
-  project.
+- `record` moves the decisions file; `chatLog` moves the chat log, to a name that ends in
+  `.jsonl`; both stay inside the project.
 - `caps` lowers a field cap (never raises one: the dialog allows 48 rows).
 - `packs` adds up to eight folders of the project where `/siui on <pack>` looks for packs,
   after the project's skill folder and before the plugin's bundled one. A folder outside

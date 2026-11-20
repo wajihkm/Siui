@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import unittest
 import urllib.parse
 
@@ -41,6 +42,43 @@ def find_browser():
         if os.path.exists(path):
             return path
     return None
+
+
+def browse(browser, address, budget, accept, before_retry=None, size="1500,1000"):
+    """The final markup of the page at `address`, from a headless browser. A browser started while the one before it
+    is still closing may answer with nothing: it is tried once more, a little later, until `accept(markup)`."""
+    command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", f"--window-size={size}",
+               f"--virtual-time-budget={budget}", "--dump-dom", address]
+    if hasattr(os, "geteuid") and os.geteuid() == 0 or os.environ.get("CI"):
+        command.insert(1, "--no-sandbox")
+    dom = ""
+    for pause in (0, 1.5):
+        if pause:
+            time.sleep(pause)
+            if before_retry:
+                before_retry()
+        try:
+            dom = subprocess.run(command, capture_output=True, timeout=300).stdout.decode("utf-8", "replace")
+        except subprocess.TimeoutExpired:
+            dom = ""
+        if accept(dom):
+            break
+    return dom
+
+
+def on_a_port_that_answers(make, visit, accept, close):
+    """Runs `visit(server)` on a server from `make()`, and on a new one when the browser gets nothing from it: a
+    browser of another system (Windows' from WSL) cannot reach every port a test server may be given. Returns
+    (the markup, the server), the server still running for the caller to read and close."""
+    dom, server = "", None
+    for _ in range(4):
+        server = make()
+        dom = visit(server)
+        if accept(dom):
+            break
+        close(server)
+        server = None
+    return dom, server
 
 
 class Board:
@@ -137,25 +175,19 @@ class Board:
 
 def walk_page(browser, state, universe, page=None, budget=90000, driver=None, address="/?k=" + Board.KEY):
     """Opens the page on the given state, lets the driver walk it, and returns (the driver's notes, the board)."""
-    board = Board(state, universe, page, driver)
-    try:
-        command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--window-size=1500,1000",
-                   f"--virtual-time-budget={budget}", "--dump-dom", f"http://127.0.0.1:{board.port}{address}"]
-        if hasattr(os, "geteuid") and os.geteuid() == 0 or os.environ.get("CI"):
-            command.insert(1, "--no-sandbox")
-        # A browser that was just closed may answer with nothing once: the walk is tried again before it counts.
-        for _ in range(3):
-            done = subprocess.run(command, capture_output=True, timeout=300)
-            dom = done.stdout.decode("utf-8", "replace")
-            found = re.search(r'<pre id="hostile-result"[^>]*>(.*?)</pre>', dom, re.S)
-            if found:
-                break
+    result = re.compile(r'<pre id="hostile-result"[^>]*>(.*?)</pre>', re.S)
+
+    def visit(board):
+        def afresh():
             board.exports.clear()
-            del board.posts[:]
-    finally:
-        board.close()
-    if not found:
-        raise AssertionError("the page gave no result: " + (dom[:300] or done.stderr.decode("utf-8", "replace")[:300]))
+            del board.posts[:], board.served[:], board.refused[:]
+        return browse(browser, f"http://127.0.0.1:{board.port}{address}", budget, result.search, afresh)
+
+    dom, board = on_a_port_that_answers(lambda: Board(state, universe, page, driver), visit, result.search, lambda one: one.close())
+    if board is None:
+        raise AssertionError("the page gave no result: " + dom[:300])
+    board.close()
+    found = result.search(dom)
     return json.loads(html.unescape(found.group(1))), board
 
 
@@ -174,20 +206,20 @@ def dump_page(browser, page_html, budget=4000):
             self.end_headers()
             self.wfile.write(data)
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", f"--virtual-time-budget={budget}", "--dump-dom", f"http://127.0.0.1:{server.server_address[1]}/"]
-        if hasattr(os, "geteuid") and os.geteuid() == 0 or os.environ.get("CI"):
-            command.insert(1, "--no-sandbox")
-        for _ in range(3):
-            dom = subprocess.run(command, capture_output=True, timeout=120).stdout.decode("utf-8", "replace")
-            if "<pre" in dom:
-                return dom
-        return dom
-    finally:
+    def make():
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def close(server):
         server.shutdown()
         server.server_close()
+
+    has_result = lambda dom: "<pre" in dom  # noqa: E731
+    dom, server = on_a_port_that_answers(make, lambda server: browse(browser, f"http://127.0.0.1:{server.server_address[1]}/", budget, has_result), has_result, close)
+    if server is not None:
+        close(server)
+    return dom
 
 
 # A driver that only waits and reports what is drawn: for the tests about the key, which walk nothing.
@@ -289,26 +321,34 @@ class HostilePage(unittest.TestCase):
     def test_a_board_framed_by_another_site_takes_no_key(self):
         """A page on another port of this machine shares the browser's storage with the board. Framed there, the
         board must not use a key, whether it comes in the address or was kept before."""
-        board = Board(hostile.base_state(), hostile.payload("u.none"), driver="")
-        try:
-            first = f"http://127.0.0.1:{board.port}/?k={Board.KEY}"
-            # The stranger's page first sends the browser to the board, so the key is kept; then frames the board.
-            stranger = ("<!doctype html><body><script>"
-                        "if (!sessionStorage.getItem('back')) { sessionStorage.setItem('back', '1'); location.href = %s + '#then=' + encodeURIComponent(location.href); }"
-                        "else { const f = document.createElement('iframe'); f.src = %s; document.body.appendChild(f); const g = document.createElement('iframe'); g.src = %s; document.body.appendChild(g);"
-                        " setTimeout(() => { const p = document.createElement('pre'); p.id = 'hostile-result'; p.textContent = 'framed'; document.body.appendChild(p); }, 4000); }"
-                        "</script>") % (json.dumps(first), json.dumps(f"http://127.0.0.1:{board.port}/"), json.dumps(first))
-            # The board's page, top-level, comes back to the stranger once it holds its key.
-            at = board.page.rindex(b"</body>")
-            board.page = (board.page[:at] + b"<script>setTimeout(() => { const m = /^#then=(.+)$/.exec(location.hash); if (m) location.href = decodeURIComponent(m[1]); }, 2500);</script>"
-                          + board.page[at:])
-            dom = dump_page(BROWSER, stranger, budget=14000)
-            self.assertIn("framed", dom, "the stranger's page did not get to frame the board: " + dom[:200])
-        finally:
-            board.close()
+        def attempt():
+            board = Board(hostile.base_state(), hostile.payload("u.none"), driver="")
+            try:
+                first = f"http://127.0.0.1:{board.port}/?k={Board.KEY}"
+                # The stranger's page first sends the browser to the board, so the key is kept; then frames the board.
+                stranger = ("<!doctype html><body><script>"
+                            "if (!sessionStorage.getItem('back')) { sessionStorage.setItem('back', '1'); location.href = %s + '#then=' + encodeURIComponent(location.href); }"
+                            "else { const f = document.createElement('iframe'); f.src = %s; document.body.appendChild(f); const g = document.createElement('iframe'); g.src = %s; document.body.appendChild(g);"
+                            " setTimeout(() => { const p = document.createElement('pre'); p.id = 'hostile-result'; p.textContent = 'framed'; document.body.appendChild(p); }, 4000); }"
+                            "</script>") % (json.dumps(first), json.dumps(f"http://127.0.0.1:{board.port}/"), json.dumps(first))
+                # The board's page, top-level, comes back to the stranger once it holds its key.
+                at = board.page.rindex(b"</body>")
+                board.page = (board.page[:at] + b"<script>setTimeout(() => { const m = /^#then=(.+)$/.exec(location.hash); if (m) location.href = decodeURIComponent(m[1]); }, 2500);</script>"
+                              + board.page[at:])
+                dom = dump_page(BROWSER, stranger, budget=14000)
+            finally:
+                board.close()
+            return dom, board
+
+        # A port the browser cannot reach leaves the board without its key and proves nothing: another is taken.
+        for _ in range(4):
+            dom, board = attempt()
+            states = [one for one in board.served if one == ("GET", "/state")]
+            if "framed" in dom and states:
+                break
+        self.assertIn("framed", dom, "the stranger's page did not get to frame the board: " + dom[:200])
         # A page reads the state once when it is drawn. The board in its own tab did; the two framed copies, one
         # at the plain address (the key kept by the browser) and one with the key in its address, must not have.
-        states = [one for one in board.served if one == ("GET", "/state")]
         self.assertGreater(len(states), 0, "the board never held its key, so the frames proved nothing")
         self.assertEqual(len(states), 1, "a board framed by another site read the state with the key")
         self.assertEqual(board.refused, [])

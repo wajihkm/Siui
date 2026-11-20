@@ -161,10 +161,17 @@ def open_board(run, port):
     url = f"http://127.0.0.1:{port}/?p={made}"
 
     def ran(command):
+        """Whether the opener started the browser. Its output is not read (a browser it starts would hold the pipe
+        open for as long as it lives), and one still running after a few seconds is the browser itself in front."""
         try:
-            return subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
+            child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     **({} if IS_WINDOWS else {"start_new_session": True}))
+        except OSError:
             return False
+        try:
+            return child.wait(timeout=6) == 0
+        except subprocess.TimeoutExpired:
+            return True
 
     opened = False
     if IS_WINDOWS:

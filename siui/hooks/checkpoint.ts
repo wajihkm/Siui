@@ -21,17 +21,20 @@ export type SaveMode = 'all' | 'tracked'
 /** Names that look like secrets: a save point never adds one; `git add` it by hand when it belongs in the repository. */
 const SECRET_LIKE = new RegExp(
   [
-    '(^|/)\\.env($|[._-](?!(example|sample|template|dist|defaults?)$))|(^|/)\\.envrc$|\\.env$',
+    '(^|/)\\.env($|[._-])|(^|/)\\.envrc$|\\.env$',
     '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$',
-    '(^|/)id_(rsa|dsa|ecdsa|ed25519)(?![^/]*\\.pub$)[^/]*$',
+    '(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$',
     '(^|/)\\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\\.docker/config\\.json$|(^|/)kubeconfig$',
-    '(^|/)(credentials?|secrets?|client[-_]secret[^/]*|service[-_]?account[^/]*)(\\.[a-z0-9]+)?$',
+    '(^|/)(credentials?|secrets?)(\\.[a-z0-9]+)?$',
+    '(^|/)(client[-_]secret|service[-_]?account)[^/]*\\.(json|ya?ml|p12|pem|key|txt)$',
   ].join('|'),
   'i',
 )
+/** What the list above would take but is made to be shared: a sample of an env file, a public key. */
+const SHARED_LIKE = /(^|\/)\.env[._-](example|sample|template|dist|defaults?)$|(^|\/)(example|sample|template)[^/]*\.env$|\.pub$/i
 
 export function looksSecret(path: string): boolean {
-  return SECRET_LIKE.test(path)
+  return SECRET_LIKE.test(path) && !SHARED_LIKE.test(path)
 }
 
 export type GitResult = { exitCode: number; stdout: string; stderr: string }
@@ -118,16 +121,23 @@ export async function commitFolder(
   if (busy !== '') return { error: `git is in the middle of ${busy}; finish it first` }
   // A folder with nothing git tracks has nothing for these to match: that is no error.
   const nothing = /nothing to commit|nothing added|no changes added|did not match any file/i
+  // The chat log's path is kept out only as a file: aimed at a folder it would leave that folder out of every commit.
+  let aside = keptOut
+  try {
+    if (logPath !== '' && (await $.fs.exists(join(root, logPath))) && (await $.fs.stat(join(root, logPath))).kind !== 'file') aside = []
+  } catch {
+    // not there, or not to be read: nothing of it to commit either
+  }
   let leftOut: string[] = []
-  let add = ['add', '-u', '--', '.', ...keptOut]
+  let add = ['add', '-u', '--', '.', ...aside]
   if (mode === 'all') {
     leftOut = (await newFiles($, root)).filter(looksSecret)
     // Past forty such files they are no longer a few keys to step around: only tracked files are taken.
-    if (leftOut.length <= 40) add = ['add', '-A', '--', '.', ...keptOut, ...leftOut.map(one => `:(exclude,literal)${one}`)]
+    if (leftOut.length <= 40) add = ['add', '-A', '--', '.', ...aside, ...leftOut.map(one => `:(exclude,literal)${one}`)]
   }
   const added = await git($, root, add)
   if (added.exitCode !== 0 && !nothing.test(`${added.stdout}\n${added.stderr}`)) return { error: added.stderr.split('\n')[0] || 'git add failed' }
-  const committed = await git($, root, ['commit', '-q', '-m', message, '--', '.', ...keptOut])
+  const committed = await git($, root, ['commit', '-q', '-m', message, '--', '.', ...aside])
   if (committed.exitCode !== 0 && !nothing.test(`${committed.stdout}\n${committed.stderr}`)) {
     return { error: committed.stderr.split('\n')[0] || 'the commit failed' }
   }
@@ -142,11 +152,19 @@ export async function commitFolder(
  * the configuration when it is read.
  */
 let keptOut: string[] = []
+let logPath = ''
 
 export function keepOutOfCommits(chatLog: string): void {
   const log = chatLog.replace(/^\.?\//, '')
-  const stem = log.replace(/\.jsonl$/, '')
-  keptOut = [`:(exclude,literal)${log}`, `:(exclude,glob)${stem.replace(/[*?[\]\\]/g, '\\$&')}-*.jsonl`]
+  // The configuration takes only a name ending in .jsonl; anything else here is kept out of nothing.
+  if (!log.endsWith('.jsonl')) {
+    keptOut = []
+    logPath = ''
+
+    return
+  }
+  logPath = log
+  keptOut = [`:(exclude,literal)${log}`, `:(exclude,glob)${log.replace(/\.jsonl$/, '').replace(/[*?[\]\\]/g, '\\$&')}-*.jsonl`]
 }
 keepOutOfCommits(CHAT_PATH)
 

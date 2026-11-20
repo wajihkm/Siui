@@ -35,6 +35,7 @@ const IGNORE_MARK = '# Siui: files of this machine, not of the repository'
  * this machine, remembered by `doneMark`, a file of the run folder: a mark a
  * cloned repository ships in the file does not count as done. After that the
  * file is its owner's: deleting a line under the mark opts that file back in.
+ * A file that is gone (another branch, a fresh checkout) is written again.
  */
 export async function ignoreLocalFiles($: EngineInterface, root: string, relative: string = CHAT_PATH, doneMark?: string): Promise<void> {
   const log = chatPath(root, relative)
@@ -46,8 +47,9 @@ export async function ignoreLocalFiles($: EngineInterface, root: string, relativ
   // The log by its own name, whatever it ends in, and its dated archives.
   const lines = [`/${name}`, `/${name.replace(/\.jsonl$/, '')}-*.jsonl`, 'exports/', 'decisions.json.tmp-*', 'decisions.json.broken-*']
   try {
-    if (doneMark !== undefined && (await $.fs.exists(doneMark))) return
-    const had = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const isThere = await $.fs.exists(path)
+    if (isThere && doneMark !== undefined && (await $.fs.exists(doneMark))) return
+    const had = isThere ? await $.fs.read(path) : ''
     if (doneMark === undefined && had.includes(IGNORE_MARK)) return
     const has = new Set(had.split('\n').map(one => one.trim()))
     const missing = lines.filter(one => !has.has(one))

@@ -24,7 +24,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hostile  # noqa: E402
-from test_board_page import BROWSER  # noqa: E402
+from test_board_page import BROWSER, browse, on_a_port_that_answers  # noqa: E402
 
 BOARD = os.path.abspath(hostile.BOARD)
 SERVER = os.path.join(BOARD, "server.py")
@@ -61,7 +61,7 @@ def record():
 class Running:
     """The real server on a project and a run folder of the test's own."""
 
-    def __init__(self, inside=None, prepare=None, env=None, run=None, record_at=".claude/decisions.json", made=None):
+    def __init__(self, inside=None, prepare=None, env=None, run=None, record_at=".claude/decisions.json", made=None, chat_at=".claude/chat-log.jsonl"):
         """`inside`: a folder made by the caller; the project is then its subfolder `project`, as in a larger
         repository. `prepare(root)` arranges the project before the server starts. `env` adds to the server's
         environment. `run` is a run folder to start in again. `made` is a whole project made by the caller."""
@@ -82,7 +82,7 @@ class Running:
                 os.remove(os.path.join(self.run, stale))
         with open(os.path.join(self.run, "heartbeat"), "w", encoding="utf-8") as handle:
             handle.write(str(time.time()))
-        self.process = subprocess.Popen([sys.executable, "-I", SERVER, "--root", self.root, "--run", self.run, "--record", record_at, "--port", str(free_port())],
+        self.process = subprocess.Popen([sys.executable, "-I", SERVER, "--root", self.root, "--run", self.run, "--record", record_at, "--chat", chat_at, "--port", str(free_port())],
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=dict(os.environ, **(env or {})))
         self.port = None
         for _ in range(100):
@@ -295,6 +295,7 @@ class BoardServer(unittest.TestCase):
         spec.loader.exec_module(server)
         self.assertEqual([server.is_foreign(uid, 1000) for uid in (None, 0, 1000, 1001)], [False, False, False, True])
         self.assertFalse(server.is_foreign(1001, None))
+        self.assertFalse(server.is_foreign(1001, 0), "a server run as the system's user holds nobody apart: the key decides there")
         if not os.path.exists("/proc/net/tcp"):
             self.skipTest("this system has no table of connections to read")
         listener = socket.socket()
@@ -304,8 +305,15 @@ class BoardServer(unittest.TestCase):
         try:
             caller.connect(listener.getsockname())
             accepted, address = listener.accept()
-            self.assertEqual(server.peer_uid(address, listener.getsockname()[1]), os.getuid())
-            self.assertIsNone(server.peer_uid(("127.0.0.1", 1), listener.getsockname()[1]))
+            self.assertEqual(server.peer_row(address, listener.getsockname()[1]), (os.getuid(), True))
+            # A caller still there is not taken for one that hung up; one that closed is, and its row, while it
+            # lasts, no longer says it is connected (the kernel shows such a row as the system's own user's).
+            self.assertFalse(server.has_hung_up(accepted))
+            caller.close()
+            time.sleep(0.05)
+            self.assertTrue(server.has_hung_up(accepted))
+            row = server.peer_row(address, listener.getsockname()[1])
+            self.assertTrue(row is None or row[1] is False, row)
             accepted.close()
         finally:
             caller.close()
@@ -318,7 +326,7 @@ class BoardServer(unittest.TestCase):
                 with open(os.path.join(root, ".claude", "decisions.json"), "w", encoding="utf-8") as handle:
                     json.dump(odd, handle)
                 with open(os.path.join(root, ".claude", "siui.json"), "w", encoding="utf-8") as handle:
-                    json.dump({"packs": 5, "hiddenPacks": "x", "theme": [1], "name": 7}, handle)
+                    json.dump({"packs": ["a\u0000b", 5, None] if isinstance(odd, list) else 5, "hiddenPacks": "x", "theme": [1], "name": 7}, handle)
             board = Running(prepare=prepare)
             try:
                 status, state, _ = board.call("GET", "/state")
@@ -343,6 +351,8 @@ class BoardServer(unittest.TestCase):
         def prepare(root):
             os.symlink(outside, os.path.join(root, ".claude", "exports"))
             os.symlink(outside, os.path.join(root, "linked"))
+            os.makedirs(os.path.join(root, ".claude", "skills", "decision-cards"))
+            os.symlink(outside, os.path.join(root, ".claude", "skills", "decision-cards", "packs"))
             os.makedirs(os.path.join(root, "packs-here"))
             with open(os.path.join(root, "packs-here", "inner-pack.md"), "w", encoding="utf-8") as handle:
                 handle.write("# World 8: Inner\n")
@@ -368,6 +378,28 @@ class BoardServer(unittest.TestCase):
             for name in ("private-notes", "shared-pack"):
                 self.assertEqual(board.call("POST", "/pack-delete", {"name": name})[1]["ok"], False)
             self.assertEqual(sorted(os.listdir(outside)), before)
+        finally:
+            board.close()
+            shutil.rmtree(outside, ignore_errors=True)
+
+    def test_an_ignore_file_that_is_a_link_is_not_written_through(self):
+        """A repository ships the exports folder with its ignore file a link to a file that is not there yet: the
+        person's own git settings, say. Writing "*" through it would make git ignore everything they have."""
+        if os.name == "nt":
+            self.skipTest("links need a privilege on Windows")
+        outside = tempfile.mkdtemp(prefix="siui-test-outside-")
+        target = os.path.join(outside, "git-ignore-of-the-person")
+
+        def prepare(root):
+            os.makedirs(os.path.join(root, ".claude", "exports"))
+            os.symlink(target, os.path.join(root, ".claude", "exports", ".gitignore"))
+
+        board = Running(prepare=prepare)
+        try:
+            _, answer, _ = board.call("POST", "/export", {"kind": "md", "text": "# the roadmap\n"})
+            self.assertEqual(answer["ok"], True, answer)
+            self.assertFalse(os.path.lexists(target), "the ignore file was written through the link")
+            self.assertEqual(os.listdir(outside), [])
         finally:
             board.close()
             shutil.rmtree(outside, ignore_errors=True)
@@ -549,21 +581,100 @@ class SavePoints(unittest.TestCase):
         self.assertIn("M project/.claude/chat-log.jsonl", self.git("status", "--short"))
         self.assertIn("?? project/.claude/chat-log-2026-10-01.jsonl", self.git("status", "--short"))
 
-    def test_a_folder_with_nothing_tracked_is_no_error(self):
+    def test_a_folder_with_nothing_tracked_is_no_error_and_a_save_point_is_always_a_commit(self):
         empty = tempfile.mkdtemp(prefix="siui-test-empty-")
         try:
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=empty, check=True, capture_output=True)
             board = Running(inside=empty)
             try:
+                # Nothing is committed in the repository yet: there is no commit a save point could be.
                 _, answer, _ = board.call("POST", "/checkpoint", {"title": "nothing yet", "world": 1, "level": "1-1", "newFiles": "tracked"})
+                self.assertEqual(answer["ok"], False, answer)
+                self.assertIn("nothing is committed", answer["error"])
+                _, state, _ = board.call("GET", "/state")
+                self.assertFalse([one for one in state["record"].get("events", []) if one.get("title") == "nothing yet"])
+                # A commit beside the project, none of its files in it: "tracked only" has nothing to take, and says so by saving the commit there is.
+                os.makedirs(os.path.join(empty, "beside"))
+                with open(os.path.join(empty, "beside", "a.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("a\n")
+                subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "beside"], cwd=empty, check=True, capture_output=True)
+                subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "beside"], cwd=empty, check=True, capture_output=True)
+                _, answer, _ = board.call("POST", "/checkpoint", {"title": "tracked, nothing here", "world": 1, "level": "1-1", "newFiles": "tracked"})
                 self.assertEqual(answer["ok"], True, answer)
-                _, answer, _ = board.call("POST", "/checkpoint", {"title": "the first", "world": 1, "level": "1-1", "newFiles": "all"})
+                self.assertRegex(answer["commit"], r"^[0-9a-f]{40}$")
+                _, answer, _ = board.call("POST", "/checkpoint", {"title": "the first of the project", "world": 1, "level": "1-1", "newFiles": "all"})
                 self.assertEqual(answer["ok"], True, answer)
                 self.assertRegex(answer["commit"], r"^[0-9a-f]{40}$")
             finally:
                 board.close()
         finally:
             shutil.rmtree(empty, ignore_errors=True)
+
+    def test_the_chat_log_setting_cannot_leave_a_folder_out(self):
+        """The chat log's path is kept out of every commit. Aimed at a folder of sources it would hide that folder
+        from every save point, and the commit before a return would not keep the work in it."""
+        for chat_at in ("src", "src.jsonl"):
+            repo = tempfile.mkdtemp(prefix="siui-test-chatpath-")
+            try:
+                subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, capture_output=True)
+                board = Running(inside=repo, chat_at=chat_at)
+                try:
+                    os.makedirs(os.path.join(board.root, chat_at))
+                    with open(os.path.join(board.root, chat_at, "work.py"), "w", encoding="utf-8") as handle:
+                        handle.write("work\n")
+                    _, answer, _ = board.call("POST", "/checkpoint", {"title": "work", "world": 1, "level": "1-1", "newFiles": "all"})
+                    self.assertEqual(answer["ok"], True, answer)
+                    listed = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo, capture_output=True, text=True).stdout
+                    self.assertIn(f"project/{chat_at}/work.py", listed, chat_at)
+                finally:
+                    board.close()
+            finally:
+                shutil.rmtree(repo, ignore_errors=True)
+
+    def plant(self, held):
+        """Adds to the record a save point at the commit `held`, as a cloned record could name any commit."""
+        path = os.path.join(self.repo, "project", ".claude", "decisions.json")
+        with open(path, encoding="utf-8") as handle:
+            kept = json.load(handle)
+        kept["events"].append({"id": "checkpoint-planted", "kind": "checkpoint", "title": "planted", "world": 1, "level": "1-1",
+                               "at": "2026-10-05T09:31:00Z", "status": "open", "commit": held, "branch": "main"})
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(kept, handle)
+
+    def test_a_return_waits_for_a_file_where_the_save_point_has_a_folder(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/.env/readme", "a folder named like a secret\n")
+        self.git("add", "-f", "project/.env/readme")
+        self.git("commit", "-q", "-m", "holds a folder at .env")
+        held = self.git("rev-parse", "HEAD")
+        self.git("rm", "-q", "-r", "--cached", "project/.env")
+        shutil.rmtree(os.path.join(self.repo, "project", ".env"))
+        self.git("commit", "-q", "-m", "no longer")
+        self.write("project/.env", "TOKEN=mine\n")
+        self.plant(held)
+        head = self.git("rev-parse", "HEAD")
+        _, back, _ = self.board.call("POST", "/revert", {"id": "checkpoint-planted", "world": 1, "level": "1-1"})
+        self.assertEqual(back["ok"], False, back)
+        self.assertIn("write over", back["error"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        with open(os.path.join(self.repo, "project", ".env"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "TOKEN=mine\n")
+
+    def test_a_return_is_not_held_up_by_a_new_file_it_keeps_anyway(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/notes.md", "the save point's\n")
+        self.git("add", "project/notes.md")
+        self.git("commit", "-q", "-m", "holds notes")
+        held = self.git("rev-parse", "HEAD")
+        self.git("rm", "-q", "--cached", "project/notes.md")
+        self.git("commit", "-q", "-m", "notes no longer tracked")
+        self.write("project/notes.md", "mine, written since\n")
+        self.plant(held)
+        _, back, _ = self.board.call("POST", "/revert", {"id": "checkpoint-planted", "world": 1, "level": "1-1"})
+        self.assertEqual(back["ok"], True, back)
+        self.assertEqual(self.git("show", f"{back['keptAs']}:project/notes.md"), "mine, written since")
+        with open(os.path.join(self.repo, "project", "notes.md"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "the save point's\n")
 
     def test_an_export_stays_out_of_git(self):
         _, answer, _ = self.board.call("POST", "/export", {"kind": "md", "text": "# the roadmap\n"})
@@ -616,6 +727,102 @@ class SavePoints(unittest.TestCase):
         self.assertEqual(self.git("show", f"{back['keptAs']}:project/src/app.py"), "print(3)")
         self.assertIn(f"commit {saved['commit'][:7]}", self.board.prompts()[-1])
         self.assertNotIn("good", self.board.prompts()[-1])
+
+
+@unittest.skipUnless(os.path.exists("/proc/net/tcp") and hasattr(os, "getuid") and os.getuid() != 0,
+                     "needs Linux's table of connections, and a user that is not the system's own")
+class AnotherUser(unittest.TestCase):
+    """The server run in this process and told it belongs to somebody else: every call the test makes is then another
+    user's, as the kernel's table says, and must change nothing, key or no key, answer awaited or not."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("siui_board_server_other", SERVER)
+        self.server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.server)
+        self.root = tempfile.mkdtemp(prefix="siui-test-project-")
+        self.run_folder = tempfile.mkdtemp(prefix="siui-test-run-")
+        os.makedirs(os.path.join(self.root, ".claude"))
+        with open(os.path.join(self.root, ".claude", "decisions.json"), "w", encoding="utf-8") as handle:
+            json.dump(record(), handle)
+        import argparse
+        import threading
+        self.board = self.server.Board(argparse.Namespace(root=self.root, run=self.run_folder, record=".claude/decisions.json", chat=".claude/chat-log.jsonl", port=0, ipc=""))
+        self.httpd = self.server.BoardServer(("127.0.0.1", 0), self.server.make_handler(self.board))
+        self.board.port = self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.run_folder, ignore_errors=True)
+
+    def call(self, method, path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            headers = {"X-Siui-Key": self.board.key}
+            data = None
+            if body is not None:
+                data, headers["Content-Type"] = json.dumps(body).encode("utf-8"), "application/json"
+            connection.request(method, path, data, headers)
+            return connection.getresponse().status
+        finally:
+            connection.close()
+
+    def hit_and_run(self, path, body, reset):
+        """A whole request with the key, and the caller gone before any answer: by a reset, or by a plain close."""
+        import struct
+        data = json.dumps(body).encode("utf-8")
+        request = (f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nX-Siui-Key: {self.board.key}\r\n"
+                   f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n\r\n").encode("ascii") + data
+        caller = socket.create_connection(("127.0.0.1", self.port))
+        if reset:
+            caller.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        caller.sendall(request)
+        caller.close()
+
+    def inbox(self):
+        try:
+            with open(os.path.join(self.run_folder, "inbox-prompts.jsonl"), encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            return ""
+
+    def test_the_same_user_is_served(self):
+        self.assertEqual(self.call("GET", "/state"), 200)
+        self.assertEqual(self.call("POST", "/prompt", {"text": "mine"}), 200)
+        self.assertIn("mine", self.inbox())
+
+    def test_another_user_changes_nothing_with_the_key_or_a_pass(self):
+        with open(os.path.join(self.run_folder, "pass"), "w", encoding="utf-8") as handle:
+            json.dump({"pass": "p" * 43, "at": time.time()}, handle)
+        with mock.patch.object(self.server.os, "getuid", return_value=os.getuid() + 4242):
+            self.assertEqual(self.call("GET", "/state"), 403)
+            self.assertEqual(self.call("GET", "/head"), 403)
+            self.assertEqual(self.call("POST", "/prompt", {"text": "theirs"}), 403)
+            self.assertEqual(self.call("POST", "/auto", {"on": True}), 403)
+            self.assertEqual(self.call("POST", "/enter", {"pass": "p" * 43}), 403)
+            # Gone before the server looks: no row for the caller in the kernel's table, and still nothing happens.
+            for i in range(20):
+                self.hit_and_run("/prompt", {"text": f"theirs {i}"}, reset=i % 2 == 0)
+                self.hit_and_run("/auto", {"on": True}, reset=i % 2 == 1)
+                self.hit_and_run("/enter", {"pass": "p" * 43}, reset=i % 2 == 0)
+            time.sleep(0.5)
+        self.assertEqual(self.inbox(), "")
+        self.assertFalse(os.path.exists(os.path.join(self.run_folder, "auto.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.run_folder, "alive")))
+        self.assertTrue(os.path.exists(os.path.join(self.run_folder, "pass")), "another user spent the pass")
+        key = self.board.key
+        with open(os.path.join(self.run_folder, "key"), encoding="ascii") as handle:
+            self.assertEqual(handle.read().strip(), key, "another user made the key change")
+
+    def test_a_caller_that_hangs_up_gets_nothing_done_even_as_the_same_user(self):
+        for i in range(10):
+            self.hit_and_run("/prompt", {"text": f"gone {i}"}, reset=True)
+        time.sleep(0.3)
+        # Either the row was still there (the same user: served) or it was gone (refused): what must never happen is
+        # a caller with no row being served, and that is what the test above pins down for another user.
+        self.assertLessEqual(self.inbox().count("gone"), 10)
 
 
 class OpeningFiles(unittest.TestCase):
@@ -702,11 +909,11 @@ class OpeningTheBoard(unittest.TestCase):
     def open_with(self, platform, windows=False, wsl=False, works=("wslview", "xdg-open", "open", "powershell.exe")):
         calls = []
 
-        def run(command, **_):
+        def started(command, **_):
             calls.append(list(command))
-            return mock.Mock(returncode=0 if os.path.basename(command[0]) in works else 1)
+            return mock.Mock(wait=mock.Mock(return_value=0 if os.path.basename(command[0]) in works else 1))
 
-        with mock.patch.object(self.launch.subprocess, "run", side_effect=run), mock.patch.object(self.launch.sys, "platform", platform), \
+        with mock.patch.object(self.launch.subprocess, "Popen", side_effect=started), mock.patch.object(self.launch.sys, "platform", platform), \
                 mock.patch.object(self.launch, "IS_WINDOWS", windows), mock.patch.object(self.launch, "is_wsl", return_value=wsl), \
                 mock.patch.object(self.launch, "folder", return_value=0), \
                 mock.patch.object(self.launch.os, "startfile", create=True, side_effect=lambda url: calls.append(["startfile", url])):
@@ -736,6 +943,26 @@ class OpeningTheBoard(unittest.TestCase):
         if os.name != "nt":
             self.assertEqual(os.stat(page).st_mode & 0o077, 0)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the stub openers are shell scripts")
+    def test_a_browser_that_stays_in_front_is_not_waited_for(self):
+        """An opener may be the browser itself, started fresh: it keeps its output open and does not end. The
+        launcher must not wait on it, nor take its silence for a failure and remove the pass."""
+        stubs = tempfile.mkdtemp(prefix="siui-test-stubs-")
+        try:
+            for name in ("wslview", "xdg-open"):
+                with open(os.path.join(stubs, name), "w", encoding="utf-8") as handle:
+                    handle.write("#!/bin/sh\necho opening \"$1\"\nsleep 30\n")
+                os.chmod(os.path.join(stubs, name), 0o755)
+            started = time.time()
+            done = subprocess.run([sys.executable, "-I", LAUNCH, "open", self.run_folder, "5131"], capture_output=True, text=True, timeout=60,
+                                  env=dict(os.environ, PATH=stubs + os.pathsep + os.environ.get("PATH", "")))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertLess(time.time() - started, 15)
+            self.assertTrue(os.path.exists(os.path.join(self.run_folder, "pass")), "the pass was removed though a browser was started")
+        finally:
+            subprocess.run(["pkill", "-f", stubs], capture_output=True)
+            shutil.rmtree(stubs, ignore_errors=True)
+
     def test_no_pass_is_left_when_nothing_opened(self):
         for platform, wsl in (("linux", False), ("linux", True), ("darwin", False)):
             code, calls, waiting = self.open_with(platform, wsl=wsl, works=())
@@ -748,50 +975,41 @@ class OpeningTheBoard(unittest.TestCase):
 class RealPage(unittest.TestCase):
     """The page as the real server sends it, under its real policy: it must still run, and enter with a pass."""
 
-    def dump(self, url):
-        command = [BROWSER, "--headless=new", "--disable-gpu", "--no-first-run", "--virtual-time-budget=8000", "--dump-dom", url]
-        if hasattr(os, "geteuid") and os.geteuid() == 0 or os.environ.get("CI"):
-            command.insert(1, "--no-sandbox")
-        for _ in range(3):
-            dom = subprocess.run(command, capture_output=True, timeout=120).stdout.decode("utf-8", "replace")
-            if "<body" in dom:
-                break
+    def visit(self, how):
+        """The real page of a real server, opened with a pass, with the key's link or with neither: (what it drew,
+        without its own code, and the server, still running)."""
+        def address(board):
+            if how == "pass":
+                return f"http://127.0.0.1:{board.port}/?p={board.launcher('pass', board.run).stdout.strip()}"
+            return f"http://127.0.0.1:{board.port}/" + (f"?k={board.key}" if how == "key" else "")
+
+        drawn = lambda dom: "<body" in dom  # noqa: E731
+        dom, board = on_a_port_that_answers(Running, lambda board: browse(BROWSER, address(board), 8000, drawn), drawn, lambda board: board.close())
+        self.assertIsNotNone(board, "no browser answer from any server")
+        self.addCleanup(board.close)
         # What the page drew, without its own code: the scripts and styles hold the same words as templates.
-        return re.sub(r"<(script|style)\b.*?</\1>", "", dom, flags=re.S)
+        return re.sub(r"<(script|style)\b.*?</\1>", "", dom, flags=re.S), board
 
     def test_a_page_with_a_pass_draws_the_board(self):
-        board = Running()
-        try:
-            given = board.launcher("pass", board.run).stdout.strip()
-            dom = self.dump(f"http://127.0.0.1:{board.port}/?p={given}")
-            self.assertRegex(dom, r'<div id="nokey" hidden=""', "the page asked for its key although it came with a pass")
-            self.assertIn('data-run="demo/world-1"', dom, "the board was not drawn: the page's own scripts did not run under its policy")
-            self.assertNotIn("<img src=\"x\" onerror", dom)
-            self.assertFalse(os.path.exists(os.path.join(board.run, "pass")), "the pass was not spent")
-            self.assertTrue(os.path.exists(os.path.join(board.run, "alive")))
-        finally:
-            board.close()
+        dom, board = self.visit("pass")
+        self.assertRegex(dom, r'<div id="nokey" hidden=""', "the page asked for its key although it came with a pass")
+        self.assertIn('data-run="demo/world-1"', dom, "the board was not drawn: the page's own scripts did not run under its policy")
+        self.assertNotIn("<img src=\"x\" onerror", dom)
+        self.assertFalse(os.path.exists(os.path.join(board.run, "pass")), "the pass was not spent")
+        self.assertTrue(os.path.exists(os.path.join(board.run, "alive")))
 
     def test_a_page_with_the_key_link_draws_the_board(self):
-        board = Running()
-        try:
-            dom = self.dump(f"http://127.0.0.1:{board.port}/?k={board.key}")
-            self.assertRegex(dom, r'<div id="nokey" hidden=""')
-            self.assertIn('data-run="demo/world-1"', dom)
-        finally:
-            board.close()
+        dom, _ = self.visit("key")
+        self.assertRegex(dom, r'<div id="nokey" hidden=""')
+        self.assertIn('data-run="demo/world-1"', dom)
 
     def test_a_page_without_the_key_says_how_to_get_it(self):
-        board = Running()
-        try:
-            dom = self.dump(f"http://127.0.0.1:{board.port}/")
-            self.assertRegex(dom, r'<div id="nokey" role="alertdialog"', "the page did not say it needs its key")
-            self.assertIn("/siui board", dom)
-            self.assertNotIn('data-run="demo/world-1"', dom)
-            self.assertNotIn(PLANTED[:20], dom)
-            self.assertFalse(os.path.exists(os.path.join(board.run, "alive")))
-        finally:
-            board.close()
+        dom, board = self.visit("none")
+        self.assertRegex(dom, r'<div id="nokey" role="alertdialog"', "the page did not say it needs its key")
+        self.assertIn("/siui board", dom)
+        self.assertNotIn('data-run="demo/world-1"', dom)
+        self.assertNotIn(PLANTED[:20], dom)
+        self.assertFalse(os.path.exists(os.path.join(board.run, "alive")))
 
 
 if __name__ == "__main__":
