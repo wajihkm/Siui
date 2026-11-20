@@ -11,6 +11,7 @@
 
 import type { EngineInterface } from 'claude-code'
 
+import { CHAT_PATH } from './chat'
 import { join } from './paths'
 import { timeSuffix } from './record'
 
@@ -18,8 +19,16 @@ import { timeSuffix } from './record'
 export type SaveMode = 'all' | 'tracked'
 
 /** Names that look like secrets: a save point never adds one; `git add` it by hand when it belongs in the repository. */
-const SECRET_LIKE =
-  /(^|\/)\.env($|\.(?!(example|sample|template|dist|defaults?)$))|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)$|(^|\/)id_(rsa|dsa|ecdsa|ed25519)$|(^|\/)\.(npmrc|pypirc|netrc|git-credentials)$|(^|\/)(credentials?|secrets?)(\.[a-z0-9]+)?$/i
+const SECRET_LIKE = new RegExp(
+  [
+    '(^|/)\\.env($|[._-](?!(example|sample|template|dist|defaults?)$))|(^|/)\\.envrc$|\\.env$',
+    '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$',
+    '(^|/)id_(rsa|dsa|ecdsa|ed25519)(?![^/]*\\.pub$)[^/]*$',
+    '(^|/)\\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\\.docker/config\\.json$|(^|/)kubeconfig$',
+    '(^|/)(credentials?|secrets?|client[-_]secret[^/]*|service[-_]?account[^/]*)(\\.[a-z0-9]+)?$',
+  ].join('|'),
+  'i',
+)
 
 export function looksSecret(path: string): boolean {
   return SECRET_LIKE.test(path)
@@ -92,11 +101,12 @@ export async function busyWith($: EngineInterface, root: string): Promise<string
 
 /**
  * Commits the project's folder: the files git tracks, and with `all` the new
- * ones too, except any whose name looks like a secret. The commit is of this
- * folder alone: in a larger repository the other folders, and what is staged
- * there, stay as they are. Refused in the middle of a merge or a rebase,
- * which such a commit would conclude. Resolves the secret-looking files left
- * out, or an error line; nothing to commit is no error.
+ * ones too, except any whose name looks like a secret; never the chat log.
+ * The commit is of this folder alone: in a larger repository the other
+ * folders, and what is staged there, stay as they are. Refused in the middle
+ * of a merge or a rebase, which such a commit would conclude. Resolves the
+ * secret-looking files left out, or an error line; nothing to commit is no
+ * error.
  */
 export async function commitFolder(
   $: EngineInterface,
@@ -106,22 +116,57 @@ export async function commitFolder(
 ): Promise<{ leftOut: string[] } | { error: string }> {
   const busy = await busyWith($, root)
   if (busy !== '') return { error: `git is in the middle of ${busy}; finish it first` }
+  // A folder with nothing git tracks has nothing for these to match: that is no error.
+  const nothing = /nothing to commit|nothing added|no changes added|did not match any file/i
   let leftOut: string[] = []
-  let add = ['add', '-u', '--', '.']
+  let add = ['add', '-u', '--', '.', ...keptOut]
   if (mode === 'all') {
     leftOut = (await newFiles($, root)).filter(looksSecret)
     // Past forty such files they are no longer a few keys to step around: only tracked files are taken.
-    if (leftOut.length <= 40) add = ['add', '-A', '--', '.', ...leftOut.map(one => `:(exclude,literal)${one}`)]
+    if (leftOut.length <= 40) add = ['add', '-A', '--', '.', ...keptOut, ...leftOut.map(one => `:(exclude,literal)${one}`)]
   }
   const added = await git($, root, add)
-  if (added.exitCode !== 0) return { error: added.stderr.split('\n')[0] || 'git add failed' }
-  const committed = await git($, root, ['commit', '-q', '-m', message, '--', '.'])
-  if (committed.exitCode !== 0 && !/nothing to commit|nothing added|no changes added/i.test(`${committed.stdout}\n${committed.stderr}`)) {
+  if (added.exitCode !== 0 && !nothing.test(`${added.stdout}\n${added.stderr}`)) return { error: added.stderr.split('\n')[0] || 'git add failed' }
+  const committed = await git($, root, ['commit', '-q', '-m', message, '--', '.', ...keptOut])
+  if (committed.exitCode !== 0 && !nothing.test(`${committed.stdout}\n${committed.stderr}`)) {
     return { error: committed.stderr.split('\n')[0] || 'the commit failed' }
   }
 
   return { leftOut }
 }
+
+/**
+ * The pathspecs that keep the chat log and its dated archives out of every
+ * commit made here, whether git tracks them or not: the log holds the
+ * person's prompts, and a repository can ship one already tracked. Set from
+ * the configuration when it is read.
+ */
+let keptOut: string[] = []
+
+export function keepOutOfCommits(chatLog: string): void {
+  const log = chatLog.replace(/^\.?\//, '')
+  const stem = log.replace(/\.jsonl$/, '')
+  keptOut = [`:(exclude,literal)${log}`, `:(exclude,glob)${stem.replace(/[*?[\]\\]/g, '\\$&')}-*.jsonl`]
+}
+keepOutOfCommits(CHAT_PATH)
+
+/** Whether a name read from the record is a plain branch name, never an option: `main`, `feature/x`, `fork/2-2-a`. */
+export function isBranchName(name: unknown): name is string {
+  return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(name) && !name.includes('..')
+}
+
+/** Whether a fork read from the record names its own two roads and a plain base: what goes to git is checked first. */
+function isSoundFork(fork: RunFork): boolean {
+  return (
+    /^\d+-\d+$/.test(fork.level) &&
+    isBranchName(fork.base) &&
+    fork.branches?.a === `fork/${fork.level}-a` &&
+    fork.branches?.b === `fork/${fork.level}-b` &&
+    (fork.onDisk === 'a' || fork.onDisk === 'b')
+  )
+}
+const UNSOUND = 'the record names this fork with a branch that is not one of its own'
+
 
 /** Commits the project's folder as a checkpoint; resolves the commit, the branch and the files left out, or an error line. */
 export async function saveCheckpoint(
@@ -183,6 +228,7 @@ export async function forkRoads($: EngineInterface, root: string, level: string,
 
 /** Switches to the other road: what is on disk is committed on the current road first. */
 export async function switchRoad($: EngineInterface, root: string, fork: RunFork, road: 'a' | 'b', mode: SaveMode): Promise<{ error: string } | { ok: true }> {
+  if (!isSoundFork(fork)) return { error: UNSOUND }
   const kept = await commitFolder($, root, `Road ${fork.onDisk} of ${fork.level}: before switching`, mode)
   if ('error' in kept) return kept
   const switched = await git($, root, ['switch', '-q', fork.branches[road]])
@@ -208,6 +254,7 @@ export async function mergeRoads(
   keep: 'a' | 'b' | 'both',
   mode: SaveMode,
 ): Promise<{ tag: string; merged: 'a' | 'b' | 'both' } | { error: string }> {
+  if (!isSoundFork(fork)) return { error: UNSOUND }
   const before = await commitFolder($, root, `Road ${fork.onDisk} of ${fork.level}: before the merge`, mode)
   if ('error' in before) return before
   const kept: 'a' | 'b' = keep === 'b' ? 'b' : 'a'

@@ -29,23 +29,33 @@ const IGNORE_MARK = '# Siui: files of this machine, not of the repository'
 
 /**
  * Keeps the chat log, the exports and the record's leftovers out of git: a
- * `.gitignore` beside the log, written once. The log holds the person's own
- * prompts and the answers; a `git add -A`, theirs or a save point's, must not
- * take it. A file that already carries the mark is left as its owner made it,
- * so deleting a line under the mark is how one opts a file back in.
+ * `.gitignore` beside the log. The log holds the person's own prompts and the
+ * answers; their own `git add -A` must not take it (a save point never does,
+ * whatever this file says). The lines are made sure of once per project on
+ * this machine, remembered by `doneMark`, a file of the run folder: a mark a
+ * cloned repository ships in the file does not count as done. After that the
+ * file is its owner's: deleting a line under the mark opts that file back in.
  */
-export async function ignoreLocalFiles($: EngineInterface, root: string, relative: string = CHAT_PATH): Promise<void> {
+export async function ignoreLocalFiles($: EngineInterface, root: string, relative: string = CHAT_PATH, doneMark?: string): Promise<void> {
   const log = chatPath(root, relative)
   const cut = Math.max(log.lastIndexOf('/'), log.lastIndexOf('\\'))
   if (cut <= 0) return
   const folder = log.slice(0, cut)
-  const stem = log.slice(cut + 1).replace(/\.jsonl$/, '')
+  const name = log.slice(cut + 1)
   const path = `${folder}/.gitignore`
-  const lines = [IGNORE_MARK, `${stem}*.jsonl`, 'exports/', 'decisions.json.tmp-*', 'decisions.json.broken-*']
+  // The log by its own name, whatever it ends in, and its dated archives.
+  const lines = [`/${name}`, `/${name.replace(/\.jsonl$/, '')}-*.jsonl`, 'exports/', 'decisions.json.tmp-*', 'decisions.json.broken-*']
   try {
+    if (doneMark !== undefined && (await $.fs.exists(doneMark))) return
     const had = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-    if (had.includes(IGNORE_MARK)) return
-    await $.fs.write(path, `${had}${had !== '' && !had.endsWith('\n') ? '\n' : ''}${lines.join('\n')}\n`)
+    if (doneMark === undefined && had.includes(IGNORE_MARK)) return
+    const has = new Set(had.split('\n').map(one => one.trim()))
+    const missing = lines.filter(one => !has.has(one))
+    if (missing.length > 0) {
+      const head = has.has(IGNORE_MARK) ? [] : [IGNORE_MARK]
+      await $.fs.write(path, `${had}${had !== '' && !had.endsWith('\n') ? '\n' : ''}${[...head, ...missing].join('\n')}\n`)
+    }
+    if (doneMark !== undefined) await $.fs.write(doneMark, `${new Date().toISOString()}\n`)
   } catch {
     // a folder that cannot be written keeps no log either
   }
@@ -57,12 +67,13 @@ export async function appendChat(
   root: string,
   relative: string,
   turn: { world: number | null; level: string; user: string; assistant: string },
+  doneMark?: string,
 ): Promise<boolean> {
   const user = cutText(turn.user, USER_MAX)
   const assistant = cutText(turn.assistant, ANSWER_MAX)
   if (user === '' && assistant === '') return false
   const path = chatPath(root, relative)
-  await ignoreLocalFiles($, root, relative)
+  await ignoreLocalFiles($, root, relative, doneMark)
   const line = JSON.stringify({ at: new Date().toISOString(), world: turn.world, level: turn.level, user, assistant })
   let had = ''
   if (await $.fs.exists(path)) {

@@ -20,7 +20,7 @@ export type GameConfig = {
   record: string
   /** The field caps, each at most the built-in one. */
   caps: Caps
-  /** Extra folders holding packs, relative to the project root or absolute. */
+  /** Extra folders holding packs, relative to the project root. */
   packs: string[]
   /** The port the HTML board's server tries first (then the next nine). */
   boardPort: number
@@ -86,7 +86,8 @@ export async function readConfig($: EngineInterface, root: string): Promise<Game
     if (typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535) made.boardPort = port
     if (Array.isArray(parsed.packs)) {
       made.packs = parsed.packs
-        .filter((one): one is string => typeof one === 'string' && one.trim() !== '' && !one.includes('..') && !isNetwork(one))
+        // A folder of the project's own packs lies in the project; packs shared between projects belong in the home folder's skill.
+        .filter((one): one is string => typeof one === 'string' && one.trim() !== '' && !one.includes('..') && !isNetwork(one) && !isAbsolute(one.trim()))
         .map(one => one.trim())
         .slice(0, 8)
     }

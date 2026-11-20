@@ -444,8 +444,8 @@
   <div class="box">
     <h2 id="nokeyTitle">This board needs its key</h2>
     <p id="nokeyHow">In the chat, run <code>/siui board</code>. It opens the board with its key.</p>
-    <p class="g">For a bookmark, or the editor's own browser, run <code>/siui board link</code> and open the link it prints.</p>
-    <p class="g">The key keeps the board yours: without it, nothing else on this machine can read it or write to your chat.</p>
+    <p class="g">For the editor's own browser, run <code>/siui board link</code> and open the link it prints.</p>
+    <p class="g">The key keeps the board yours: without it, nothing else on this machine can read it or write to your chat. It is new each time the board starts.</p>
   </div>
 </div>
 <header>
@@ -499,7 +499,7 @@
 </footer>
 <div class="toast" id="toast"></div>
 <dialog id="info"><div class="infobody"></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
-<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small" value="alt" hidden></button><button class="small primary" value="ok">OK</button></div></form></dialog>
+<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small" type="button" data-alt hidden></button><button class="small primary" value="ok">OK</button></div></form></dialog>
 <dialog id="output"><div class="outbody"><h3 class="title"></h3><div class="user"></div><div class="assistant"></div></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
 <dialog id="move"><form method="dialog" class="askform"><p class="asktext">Move to</p><label class="nwlabel">World<select name="world"></select></label><label class="nwlabel">Stage<select name="level"></select></label><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small primary" value="ok">Move</button></div></form></dialog>
 <dialog id="newworld">
@@ -636,26 +636,55 @@
    * browser for this address and taken out of the address bar at once.
    */
   const KEY_STORE = 'siui.key';
-  let boardKey = '', keyMissing = false;
+  let boardKey = '', keyMissing = false, cameWithKey = false;
   const stored = { get: () => { try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; } },
     set: v => { try { if (v) localStorage.setItem(KEY_STORE, v); else localStorage.removeItem(KEY_STORE); } catch (e) { /* a browser that keeps nothing: the key lasts as long as the page */ } } };
+  /**
+   * Whether another site shows this page inside one of its own. A page on another port of this machine is another
+   * site, yet the browser lets it share this address's storage: a board framed there would hold the key and could
+   * be clicked blind. So a framed board takes its key only inside the board's own pages or the editor's own browser.
+   */
+  function framedByStranger() {
+    if (window.top === window.self) return false;
+    const friendly = o => o === location.origin || /^vscode-(webview|file):/i.test(o);
+    const around = location.ancestorOrigins;
+    if (around && typeof around.length === 'number') { for (let i = 0; i < around.length; i += 1) if (!friendly(String(around[i]))) return true; return false; }
+    // A browser that does not name the pages around a frame: only a top page of the board's own address is known.
+    try { return window.top.location.origin !== location.origin; } catch (e) { return true; }
+  }
   async function enter() {
     const q = new URLSearchParams(location.search), given = q.get('k') || '', pass = q.get('p') || '';
     if (q.has('k') || q.has('p')) { q.delete('k'); q.delete('p'); const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash); }
+    if (framedByStranger()) {
+      keyMissing = true;
+      $('nokeyTitle').textContent = 'This board is inside another page';
+      $('nokeyHow').textContent = `Open it in a tab of its own: ${location.origin}/`;
+      $('nokey').querySelectorAll('p.g').forEach((one, i) => { one.textContent = i === 0 ? 'A board shown inside another site takes no key, so nothing in it can be pressed without you seeing it.' : ''; });
+      $('nokey').hidden = false;
+      return;
+    }
     const shaped = v => /^[A-Za-z0-9_-]{32,128}$/.test(v);
-    if (shaped(given)) boardKey = given;
+    let offered = '';
+    if (shaped(given)) offered = given;
     else if (shaped(pass)) {
       try {
         const data = await (await fetch('/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pass }) })).json();
-        if (data && data.ok === true && shaped(String(data.key || ''))) boardKey = data.key;
-      } catch (e) { /* the stored key, if any, is tried next */ }
+        if (data && data.ok === true && shaped(String(data.key || ''))) offered = data.key;
+      } catch (e) { /* the key this browser holds, if any, is tried next */ }
     }
-    if (boardKey) stored.set(boardKey); else boardKey = stored.get();
+    // A key from the address is kept only once the server took it: a link from anywhere can neither replace the key
+    // this browser holds nor make it forget one.
+    if (offered) {
+      let taken = false;
+      try { taken = (await fetch('/head', { cache: 'no-store', headers: { 'X-Siui-Key': offered } })).ok; } catch (e) { /* not reached */ }
+      if (taken) { boardKey = offered; cameWithKey = true; stored.set(offered); return; }
+    }
+    boardKey = stored.get();
   }
-  /** The page has no key, or one this board does not know: it is forgotten, the polling stops, the screen says what to do. */
+  /** The page has no key, or one this board does not know: the polling stops, the screen says what to do. */
   function needKey() {
     if (keyMissing) return;
-    keyMissing = true; boardKey = ''; stored.set('');
+    keyMissing = true; boardKey = '';
     document.querySelectorAll('dialog[open]').forEach(d => { try { d.close(); } catch (e) { /* not open */ } });
     $('nokey').hidden = false;
   }
@@ -1005,7 +1034,7 @@
   /** An in-page confirm (no `value`) or prompt (a `value` to edit): the browser's own are blocked inside VS Code's Simple Browser. With `alt`, a confirm has a second choice and resolves 'alt' for it. */
   function ask(text, { ok = 'OK', value = null, alt = '' } = {}) {
     return new Promise(resolve => {
-      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]'), altBtn = d.querySelector('[value=alt]');
+      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]'), altBtn = d.querySelector('[data-alt]');
       const isPrompt = value !== null;
       d.querySelector('.asktext').textContent = text;
       okBtn.textContent = ok;
@@ -1020,6 +1049,7 @@
     });
   }
   $('ask').querySelector('[data-cancel]').addEventListener('click', () => $('ask').close('cancel'));
+  $('ask').querySelector('[data-alt]').addEventListener('click', () => $('ask').close('alt'));
   /** Where to move a mark or a decision: a world and one of its stages; null when cancelled. */
   function askMove(curWorld, curLevel) {
     return new Promise(resolve => {
@@ -1093,14 +1123,14 @@
   }
   /**
    * What a prompt to the chat may carry from the state. A prompt is sent in the person's own voice, so nothing a file
-   * wrote goes into it but ids of a fixed shape: a title or an answer could hold a sentence planted for the assistant.
+   * wrote goes into it but ids of a fixed shape: a title, an answer or a path could hold a sentence planted for the
+   * assistant (a folder may be named with one).
    */
   const idOf = {
     level: v => (/^\d+-\d+[ab]?$/.test(String(v || '')) ? String(v) : ''),
     slug: v => (/^[a-z0-9-]{1,60}$/.test(String(v || '')) ? String(v) : ''),
     road: v => (v === 'a' || v === 'b' ? v : ''),
     world: v => (Number.isInteger(v) && v >= 0 ? String(v) : typeof v === 'string' && /^\d{1,4}$/.test(v) ? String(Number(v)) : ''),
-    path: v => (typeof v === 'string' && v.length < 400 && /^[\w .:~\\/+@-]+$/.test(v) ? v : ''),
   };
   /** Sends a prompt built from ids; refused when one of them is not an id. */
   async function askChat(text, ...ids) {
@@ -1698,8 +1728,8 @@
         if (await post('/pack-delete', { name: pack })) { toast('Pack deleted'); selectRun(''); }
       }));
       el.querySelector('[data-start]').addEventListener('click', async e => {
-        const pack = idOf.slug(e.currentTarget.dataset.start), world = idOf.world(run.world), at = idOf.path(run.path);
-        if (await askChat(`Start the pack ${pack} as world ${world}: read the pack${at ? ` at ${at}` : ''}, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`, pack, world)) toast('Asked the chat to start it');
+        const pack = idOf.slug(e.currentTarget.dataset.start), world = idOf.world(run.world);
+        if (await askChat(`Start the pack ${pack} as world ${world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`, pack, world)) toast('Asked the chat to start it');
       });
       return;
     }
@@ -2713,7 +2743,9 @@
       return l;
     });
     const run = r => {
-      r.world = Math.max(0, int(r.world, 0)); r.id = str(r.id); r.pack = str(r.pack); r.target = str(r.target); r.startedAt = day(r.startedAt);
+      // What marks a pack still to start is the page's own to set (pendingPacks): a run of the record cannot pose as one.
+      delete r.isPack; delete r.path; delete r.source;
+      r.world = Math.max(0, int(r.world, 0)); r.id = str(r.id).replace(/^pack:/, 'run:'); r.pack = str(r.pack); r.target = str(r.target); r.startedAt = day(r.startedAt);
       r.finishedAt = r.finishedAt === null || r.finishedAt === undefined ? null : day(r.finishedAt) || '1970-01-01';
       if (r.abandonedAt !== undefined) { const at = day(r.abandonedAt); if (at) r.abandonedAt = at; else delete r.abandonedAt; }
       if (typeof r.title !== 'string') delete r.title;
@@ -2799,9 +2831,10 @@
     const uname = ((data.config && data.config.theme) || {}).universe || 'classic';
     if (uname !== universeWanted) { universeWanted = uname; await loadUniverse(uname).catch(e => console.error(e)); }
     renderUniverseMenu();
-    // /#export=<kind> runs an export once the page and its universe are drawn.
+    // /?k=<key>#export=<kind> runs an export once the page and its universe are drawn, for a script: only when the
+    // same address brought the key, so a link on another site cannot make this browser write a file.
     const m = /^#export=(html|md|svg)$/.exec(location.hash);
-    if (m && !pageError) { history.replaceState(null, '', location.pathname); setTimeout(() => doExport(m[1]), 400); }
+    if (m) { history.replaceState(null, '', location.pathname); if (cameWithKey && !pageError) setTimeout(() => doExport(m[1]), 400); }
   }
   /** The polling: /head every 300 ms (2 s while the tab is hidden) for its small {"v": "…"}; /state only when v changed or on the first poll; one request at a time, the next scheduled after each answer. */
   let headV = null, pollTimer = 0, polling = false;
@@ -2809,6 +2842,7 @@
     if (polling || keyMissing) return;
     polling = true; clearTimeout(pollTimer);
     try {
+      if (!boardKey) { needKey(); polling = false; return; }
       const res = await api('/head');
       if (keyMissing) { polling = false; return; }
       // A server without /head is polled the old way: the state every time.

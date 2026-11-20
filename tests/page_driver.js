@@ -76,7 +76,7 @@
     if (save) {
       click(save); await sleep(80); note('save point name');
       const ok = document.querySelector('#ask[open] [value=ok]');
-      if (ok) { ok.click(); await sleep(250); note('save point new files'); out.asked = !!document.querySelector('#ask[open] [value=alt]:not([hidden])'); }
+      if (ok) { ok.click(); await sleep(250); note('save point new files'); out.asked = !!document.querySelector('#ask[open] [data-alt]:not([hidden])'); }
       closeDialogs();
     }
 

@@ -46,14 +46,19 @@ def find_browser():
 class Board:
     """The test's own board server: the real page with the driver added, and whatever state it is given."""
 
-    def __init__(self, state, universe, page=None):
+    KEY = "k" * 43
+
+    def __init__(self, state, universe, page=None, driver=None):
         with open(page or PAGE, encoding="utf-8") as handle:
             text = handle.read()
-        with open(os.path.join(HERE, "page_driver.js"), encoding="utf-8") as handle:
-            driver = handle.read()
+        if driver is None:
+            with open(os.path.join(HERE, "page_driver.js"), encoding="utf-8") as handle:
+                driver = handle.read()
         at = text.rindex("</body>")
         self.page = (text[:at] + "<script>" + driver + "</script>" + text[at:]).encode("utf-8")
         self.state, self.universe, self.exports, self.posts = state, universe, {}, []
+        self.served = []  # every data call that carried the key, in order: (method, path)
+        self.refused = []  # every data call that did not
         board = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -69,10 +74,23 @@ class Board:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def keyed(self, path):
+                """Like the real server: data is for the holder of the key."""
+                if self.headers.get("X-Siui-Key") == board.KEY:
+                    board.served.append((self.command, path))
+                    return True
+                board.refused.append((self.command, path))
+                self.send({"ok": False, "error": "no key"}, status=401)
+                return False
+
             def do_GET(self):
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/":
                     self.send(board.page, "text/html; charset=utf-8")
+                elif path in ("/icon.svg", "/icon.png"):
+                    self.send(b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml")
+                elif not self.keyed(path):
+                    return
                 elif path == "/state":
                     self.send(board.state)
                 elif path == "/head":
@@ -92,6 +110,8 @@ class Board:
                     body = json.loads(self.rfile.read(length) or b"{}")
                 except ValueError:
                     body = {}
+                if not self.keyed(path):
+                    return
                 board.posts.append((path, body))
                 if path == "/export":
                     board.exports[str(body.get("kind"))] = str(body.get("text"))
@@ -115,12 +135,12 @@ class Board:
         self.server.server_close()
 
 
-def walk_page(browser, state, universe, page=None, budget=90000):
+def walk_page(browser, state, universe, page=None, budget=90000, driver=None, address="/?k=" + Board.KEY):
     """Opens the page on the given state, lets the driver walk it, and returns (the driver's notes, the board)."""
-    board = Board(state, universe, page)
+    board = Board(state, universe, page, driver)
     try:
         command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--window-size=1500,1000",
-                   f"--virtual-time-budget={budget}", "--dump-dom", f"http://127.0.0.1:{board.port}/"]
+                   f"--virtual-time-budget={budget}", "--dump-dom", f"http://127.0.0.1:{board.port}{address}"]
         if hasattr(os, "geteuid") and os.geteuid() == 0 or os.environ.get("CI"):
             command.insert(1, "--no-sandbox")
         # A browser that was just closed may answer with nothing once: the walk is tried again before it counts.
@@ -170,6 +190,15 @@ def dump_page(browser, page_html, budget=4000):
         server.server_close()
 
 
+# A driver that only waits and reports what is drawn: for the tests about the key, which walk nothing.
+WAIT_ONLY = """
+  (async () => {
+    const pre = document.createElement('pre'); pre.id = 'hostile-result'; pre.hidden = true; document.body.appendChild(pre);
+    await new Promise(done => setTimeout(done, 3000));
+    pre.textContent = JSON.stringify({ done: true, tiles: document.querySelectorAll('#roadmap .tile[data-run]').length, nokey: !document.getElementById('nokey').hidden });
+  })();
+"""
+
 BROWSER = find_browser()
 
 
@@ -193,7 +222,7 @@ class HostilePage(unittest.TestCase):
             self.assertEqual(found, [], f"the {kind} export carries something alive")
         for path, body in board.posts:
             if path == "/prompt":
-                self.assertNotRegex(str(body.get("text")), r"<|onerror|javascript:|__pwn", "a prompt to the chat carries a value from the project's files")
+                self.assertNotRegex(str(body.get("text")), r"PLANTED_|Ignore the pack|<|onerror|javascript:|__pwn", "a prompt to the chat carries a text of the project's files")
 
     def test_checkers_see_a_live_export(self):
         bad = '<p>x</p><img src="x:" onerror="1" data-pwn="k"><a href="javascript:1">l</a><script>1</script>'
@@ -220,6 +249,69 @@ class HostilePage(unittest.TestCase):
     def test_nothing_where_everything_belongs(self):
         notes, board = walk_page(BROWSER, hostile.empty_state(), hostile.payload("u.whole"), budget=30000)
         self.check(notes, board, drawn=False)
+
+    def test_every_call_of_the_page_carries_the_key(self):
+        notes, board = walk_page(BROWSER, hostile.base_state(), hostile.payload("u.none"), budget=20000)
+        self.assertTrue(notes["done"], notes)
+        # The one call without it is the page trying the key it was given.
+        self.assertEqual(board.refused, [])
+        self.assertGreater(len([one for one in board.served if one == ("GET", "/state")]), 0)
+
+    def test_a_page_without_a_key_asks_nothing(self):
+        notes, board = walk_page(BROWSER, hostile.base_state(), hostile.payload("u.none"), budget=8000, address="/", driver=WAIT_ONLY)
+        self.assertEqual((board.served, board.refused, notes["tiles"], notes["nokey"]), ([], [], 0, True))
+
+    def test_a_link_from_anywhere_cannot_replace_or_erase_the_key(self):
+        """First the page is opened with its key; then, as a link on another site would, with a key that is not one.
+        The browser must still hold the first and draw the board with it."""
+        driver = """
+          (async () => {
+            const pre = document.createElement('pre'); pre.id = 'hostile-result'; pre.hidden = true; document.body.appendChild(pre);
+            const sleep = ms => new Promise(done => setTimeout(done, ms));
+            await sleep(1500);
+            if (!sessionStorage.getItem('second')) { sessionStorage.setItem('second', '1'); location.href = '/?k=' + 'j'.repeat(43) + '#export=md'; return; }
+            pre.textContent = JSON.stringify({ done: true, tiles: document.querySelectorAll('#roadmap .tile[data-run]').length, nokey: !document.getElementById('nokey').hidden, address: location.search + location.hash });
+          })();
+        """
+        notes, board = walk_page(BROWSER, hostile.base_state(), hostile.payload("u.none"), budget=12000, driver=driver)
+        self.assertEqual(notes["nokey"], False, "a link with a wrong key made the browser lose the right one")
+        self.assertGreater(notes["tiles"], 3)
+        self.assertEqual(notes["address"], "", "the key or the export order stayed in the address bar")
+        # The wrong key was tried once and refused; nothing else went out without the right one.
+        self.assertEqual(board.refused, [("GET", "/head")])
+        # An export by address is for the address that brings the key itself: this one did not.
+        self.assertEqual(board.exports, {})
+
+    def test_an_export_by_address_needs_the_key_in_the_address(self):
+        _, board = walk_page(BROWSER, hostile.base_state(), hostile.payload("u.none"), budget=12000, driver=WAIT_ONLY, address="/?k=" + Board.KEY + "#export=md")
+        self.assertEqual(sorted(board.exports), ["md"])
+
+    def test_a_board_framed_by_another_site_takes_no_key(self):
+        """A page on another port of this machine shares the browser's storage with the board. Framed there, the
+        board must not use a key, whether it comes in the address or was kept before."""
+        board = Board(hostile.base_state(), hostile.payload("u.none"), driver="")
+        try:
+            first = f"http://127.0.0.1:{board.port}/?k={Board.KEY}"
+            # The stranger's page first sends the browser to the board, so the key is kept; then frames the board.
+            stranger = ("<!doctype html><body><script>"
+                        "if (!sessionStorage.getItem('back')) { sessionStorage.setItem('back', '1'); location.href = %s + '#then=' + encodeURIComponent(location.href); }"
+                        "else { const f = document.createElement('iframe'); f.src = %s; document.body.appendChild(f); const g = document.createElement('iframe'); g.src = %s; document.body.appendChild(g);"
+                        " setTimeout(() => { const p = document.createElement('pre'); p.id = 'hostile-result'; p.textContent = 'framed'; document.body.appendChild(p); }, 4000); }"
+                        "</script>") % (json.dumps(first), json.dumps(f"http://127.0.0.1:{board.port}/"), json.dumps(first))
+            # The board's page, top-level, comes back to the stranger once it holds its key.
+            at = board.page.rindex(b"</body>")
+            board.page = (board.page[:at] + b"<script>setTimeout(() => { const m = /^#then=(.+)$/.exec(location.hash); if (m) location.href = decodeURIComponent(m[1]); }, 2500);</script>"
+                          + board.page[at:])
+            dom = dump_page(BROWSER, stranger, budget=14000)
+            self.assertIn("framed", dom, "the stranger's page did not get to frame the board: " + dom[:200])
+        finally:
+            board.close()
+        # A page reads the state once when it is drawn. The board in its own tab did; the two framed copies, one
+        # at the plain address (the key kept by the browser) and one with the key in its address, must not have.
+        states = [one for one in board.served if one == ("GET", "/state")]
+        self.assertGreater(len(states), 0, "the board never held its key, so the frames proved nothing")
+        self.assertEqual(len(states), 1, "a board framed by another site read the state with the key")
+        self.assertEqual(board.refused, [])
 
     def test_shipped_universes_keep_every_drawing(self):
         """The allowlist for a universe's drawings must pass everything the plugin's own sets draw, unchanged in what

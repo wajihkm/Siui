@@ -9,9 +9,12 @@ file; GET /state answers the record, the live card and the configuration, GET
 input. Only the page may call the routes beyond /, /icon.svg and /icon.png: a local Origin
 or Host, JSON for a POST, and the board's key in a header; anything else is
 refused. The key is a file in the run folder, the user's alone: another program
-or another person on this machine reaches the port but not the file. The page
-gets it once, from a one-time pass in the address `/siui board` opens (POST
-/enter) or from a link that holds the key itself, and keeps it in the browser.
+or another person on this machine reaches the port but not the file. It is made
+anew at every start, so nothing a browser kept outlives the server that guards
+the port. The page gets it once, from a one-time pass in the address `/siui
+board` opens (POST /enter) or from a link that holds the key itself, and keeps
+it in the browser. On Linux a call from another user of the machine is refused
+whatever it carries: the kernel names the owner of the other end.
 Everything runtime lives in the run folder the plugin names: the live card, the
 answer inbox, the prompt inbox, the page's liveness mark and the plugin's
 heartbeat. The server exits by itself when the plugin's heartbeat stops or a
@@ -31,6 +34,7 @@ import re
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -58,16 +62,45 @@ def new_key(path):
     return key
 
 
-def load_key(path):
-    """The board's key: made once per run folder and kept, so a bookmark that holds it works after a restart."""
-    try:
-        with open(path, encoding="ascii") as handle:
-            key = handle.read().strip()
-        if KEY_SHAPE.match(key):
-            return key
-    except (OSError, ValueError):
-        pass
+def start_key(path):
+    """The board's key for this run of the server: a new one at every start. A port on this machine is nobody's for
+    good: when the server ends, another program may take it and be handed whatever a browser still holds for that
+    address. So nothing a browser keeps, and no link, outlives the server that guards the port.
+
+    `SIUI_KEEP_KEY=1` in the person's own environment (never a project's file) keeps one key across starts, so a
+    bookmark keeps working: for a machine that is theirs alone."""
+    if os.environ.get("SIUI_KEEP_KEY", "").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            with open(path, encoding="ascii") as handle:
+                key = handle.read().strip()
+            if KEY_SHAPE.match(key):
+                return key
+        except (OSError, ValueError):
+            pass
     return new_key(path)
+
+
+def peer_uid(client, server_port):
+    """The user who owns the other end of a connection from this machine, where the system says: on Linux the
+    kernel's table of connections names it. None when it cannot be told (another system, a relay in between)."""
+    host, port = client[0], client[1]
+    try:
+        local = "%08X:%04X" % (struct.unpack("=I", socket.inet_aton(host))[0], port)
+        there = "%08X:%04X" % (struct.unpack("=I", socket.inet_aton("127.0.0.1"))[0], server_port)
+        with open("/proc/net/tcp", encoding="ascii") as handle:
+            for row in handle:
+                parts = row.split()
+                if len(parts) > 7 and parts[1] == local and parts[2] == there:
+                    return int(parts[7])
+    except (OSError, ValueError, struct.error):
+        return None
+    return None
+
+
+def is_foreign(uid, mine):
+    """Whether a call is known to come from another user of this machine. The system's own user (0) is not held
+    apart: it reads every file here anyway, and a relay such as WSL's runs as it."""
+    return uid is not None and mine is not None and uid not in (mine, 0)
 
 
 def page_policy(page):
@@ -86,8 +119,11 @@ SLUG_ID = re.compile(r"^[a-z0-9-]{1,60}$")
 COMMIT_ID = re.compile(r"^[0-9a-f]{7,64}$")
 # Names that look like secrets: a save point never adds one (the hooks hold the same list).
 SECRET_LIKE = re.compile(
-    r"(^|/)\.env($|\.(?!(example|sample|template|dist|defaults?)$))|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)$"
-    r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|(^|/)\.(npmrc|pypirc|netrc|git-credentials)$|(^|/)(credentials?|secrets?)(\.[a-z0-9]+)?$", re.I)
+    r"(^|/)\.env($|[._-](?!(example|sample|template|dist|defaults?)$))|(^|/)\.envrc$|\.env$"
+    r"|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\.tfstate\.backup$"
+    r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)(?![^/]*\.pub$)[^/]*$"
+    r"|(^|/)\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\.docker/config\.json$|(^|/)kubeconfig$"
+    r"|(^|/)(credentials?|secrets?|client[-_]secret[^/]*|service[-_]?account[^/]*)(\.[a-z0-9]+)?$", re.I)
 
 
 def card_ref(level, key):
@@ -235,7 +271,7 @@ class Board:
         self.record_missing_since = None  # when the record file vanished, for the grace that covers a git reset
         self._git_identity = None  # the -c identity options, found once
         os.makedirs(self.run, exist_ok=True)
-        self.key = load_key(self.path("key"))
+        self.key = start_key(self.path("key"))
         self.port = args.port  # the port held, set once bound: the launcher's proof names it
         self.spent_pass = None  # the last pass traded for the key: a second try at it means two programs held it
 
@@ -292,9 +328,14 @@ class Board:
             (os.path.join(HERE, "..", "packs"), "plugin"),
         ]
         config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
-        for extra in config.get("packs", []) if isinstance(config, dict) else []:
-            if isinstance(extra, str) and extra and ".." not in extra and not is_network_path(extra):
-                folders.append((extra if os.path.isabs(extra) else os.path.join(self.root, extra), "project"))
+        # A folder the project's configuration names holds the project's own packs: it lies in the project. Packs
+        # shared between projects belong in the home folder's skill.
+        given = config.get("packs") if isinstance(config, dict) else None
+        for extra in given if isinstance(given, list) else []:
+            if isinstance(extra, str) and extra and ".." not in extra and not is_network_path(extra) and not os.path.isabs(extra):
+                folder = os.path.join(self.root, extra)
+                if self.inside(folder):
+                    folders.append((folder, "project"))
         home = os.path.expanduser("~")
         if home and home != "~":
             folders.append((os.path.join(home, ".claude", "skills", "decision-cards", "packs"), "home"))
@@ -349,7 +390,9 @@ class Board:
         name = str(body.get("name") or "").strip()
         if self.universe(name) is None:
             return {"ok": False, "error": "no such universe"}
-        path = os.path.join(self.root, ".claude", "siui.json")
+        path = self.config_path()
+        if path is None:
+            return {"ok": False, "error": "the configuration's file leads out of the project"}
         with self.lock:
             config = read_json(path, {})
             if not isinstance(config, dict):
@@ -369,7 +412,9 @@ class Board:
         if not PACK_NAME.match(name):
             return {"ok": False, "error": "a pack name is required"}
         hide = bool(body.get("hidden", True))
-        path = os.path.join(self.root, ".claude", "siui.json")
+        path = self.config_path()
+        if path is None:
+            return {"ok": False, "error": "the configuration's file leads out of the project"}
         with self.lock:
             config = read_json(path, {})
             if not isinstance(config, dict):
@@ -396,7 +441,7 @@ class Board:
         pack = next((one for one in self.packs() if one["name"] == name), None)
         if pack is None:
             return {"ok": False, "error": "no such pack"}
-        if pack["source"] != "project":
+        if pack["source"] != "project" or not self.inside(pack["path"]) or os.path.islink(pack["path"]):
             return {"ok": False, "error": "not the project's pack: hide it instead"}
         with self.lock:
             try:
@@ -479,6 +524,8 @@ class Board:
         if len(text) > 20_000_000:
             return {"ok": False, "error": "the export is too big"}
         folder = os.path.join(self.root, ".claude", "exports")
+        if not self.inside(folder):
+            return {"ok": False, "error": "the exports folder leads out of the project; nothing was written"}
         os.makedirs(folder, exist_ok=True)
         # An export holds the whole record and the chat beside it: it is this machine's file, kept out of git by an
         # ignore file of the folder's own, written once. Deleting that file is how one chooses to commit exports.
@@ -492,6 +539,8 @@ class Board:
         stamp = time.strftime("%Y-%m-%d-%H%M", time.localtime())
         name = f"roadmap-{stamp}.{self.EXPORT_EXT[kind]}"
         path = os.path.join(folder, name)
+        if os.path.islink(path) or not self.inside(path):
+            return {"ok": False, "error": "the export's file leads out of the project; nothing was written"}
         try:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -593,8 +642,23 @@ class Board:
     def path(self, name):
         return os.path.join(self.run, name)
 
+    def inside(self, path):
+        """Whether a path, every link on the way followed, still lies in the project. A cloned repository can ship a
+        folder that is a link to anywhere: nothing is written or removed through one."""
+        root = os.path.realpath(self.root)
+        real = os.path.realpath(path)
+        return real == root or real.startswith(root + os.sep)
+
     def record_path(self):
-        return os.path.join(self.root, self.record)
+        """The record's file. One that leads out of the project is not read or written: the board shows no record
+        then, and what it would have written goes to a file of the run folder that nothing reads."""
+        path = os.path.join(self.root, self.record)
+        return path if self.inside(path) else self.path("record-outside-the-project.json")
+
+    def config_path(self):
+        """The configuration's file for a write; None when it leads out of the project."""
+        path = os.path.join(self.root, ".claude", "siui.json")
+        return path if self.inside(path) else None
 
     RECORD_GRACE = 2.0  # seconds a vanished record is still shown: the time git takes to reset the tree
 
@@ -677,11 +741,14 @@ class Board:
     def source_paths(record):
         """Every path the record's decisions name as a source, as spelled there."""
         paths = set()
-        for run in record.get("runs", []):
-            for one in run.get("decisions", []):
-                for source in one.get("sources", []) or []:
+        runs = record.get("runs") if isinstance(record, dict) else None
+        for run in runs if isinstance(runs, list) else []:
+            decisions = run.get("decisions") if isinstance(run, dict) else None
+            for one in decisions if isinstance(decisions, list) else []:
+                sources = one.get("sources") if isinstance(one, dict) else None
+                for source in sources if isinstance(sources, list) else []:
                     path = source.get("path") if isinstance(source, dict) else None
-                    if isinstance(path, str) and path.strip():
+                    if isinstance(path, str) and path.strip() and "\0" not in path:
                         paths.add(path.strip())
         return paths
 
@@ -695,7 +762,7 @@ class Board:
             try:
                 stat = os.stat(self.resolve(path))
                 files[path] = {"exists": True, "size": stat.st_size, "mtime": stat.st_mtime, "isDir": os.path.isdir(self.resolve(path))}
-            except OSError:
+            except (OSError, ValueError):
                 files[path] = {"exists": False}
         return files
 
@@ -886,18 +953,31 @@ class Board:
             self._has_git = code == 0 and out.strip() == "true"
         return self._has_git
 
-    def git(self, *args, timeout=60):
+    def git(self, *args, timeout=60, cwd=None):
         try:
             out = subprocess.run(["git", *self.git_options(), *args],
-                                 cwd=self.root, capture_output=True, text=True, timeout=timeout)
+                                 cwd=cwd or self.root, capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as error:
             return 1, "", str(error)
         return out.returncode, out.stdout.strip(), out.stderr.strip()
 
-    def new_files(self):
-        """The files a save point would add: not tracked, not ignored, under the project's folder."""
-        code, out, _ = self.git("ls-files", "--others", "--exclude-standard", "-z", "--", ".")
+    def new_files(self, cwd=None):
+        """The files a save point would add: not tracked, not ignored, under the project's folder (or `cwd`)."""
+        code, out, _ = self.git("ls-files", "--others", "--exclude-standard", "-z", "--", ".", cwd=cwd)
         return [one for one in out.split("\0") if one] if code == 0 else []
+
+    def chat_files(self):
+        """The chat log and its dated archives, as they are on disk: this machine's files, never a commit's."""
+        log = os.path.join(self.root, self.chat)
+        stem = log[:-6] if log.endswith(".jsonl") else log
+        return [one for one in [log, *sorted(glob.glob(glob.escape(stem) + "-*.jsonl"))] if os.path.isfile(one)]
+
+    def keep_out(self, cwd):
+        """The pathspecs that keep the chat log and its archives out of a commit, whether git tracks them or not: the
+        log holds the person's prompts, and a repository can ship one already tracked."""
+        log = os.path.relpath(os.path.join(self.root, self.chat), cwd).replace(os.sep, "/")
+        stem = log[:-6] if log.endswith(".jsonl") else log
+        return [f":(exclude,literal){log}", ":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", stem) + "-*.jsonl"]
 
     def git_busy(self):
         """What git is in the middle of, which a commit now would end wrongly; '' when nothing."""
@@ -917,25 +997,33 @@ class Board:
         mode = made.get("mode") if isinstance(made, dict) else None
         return mode if mode in ("all", "tracked") else None
 
-    def commit_folder(self, message, mode):
+    def commit_folder(self, message, mode, whole=False):
         """Commits the project's folder: the files git tracks, and with "all" the new ones too, except any whose name
-        looks like a secret. The commit is of this folder alone: in a larger repository the other folders, and what
-        is staged there, stay as they are. Refused in the middle of a merge or a rebase, which such a commit would
-        conclude. Returns (an error line or '', the secret-looking files left out)."""
+        looks like a secret; never the chat log. The commit is of this folder alone: in a larger repository the
+        other folders, and what is staged there, stay as they are. With `whole` it is of the whole repository: the
+        commit before a return, which resets all of it. Refused in the middle of a merge or a rebase, which such a
+        commit would conclude. Returns (an error line or '', the secret-looking files left out)."""
         busy = self.git_busy()
         if busy:
             return f"git is in the middle of {busy}; finish it first", []
-        left_out, add = [], ["add", "-u", "--", "."]
+        cwd = self.root
+        if whole:
+            code, top, _ = self.git("rev-parse", "--show-toplevel")
+            cwd = top if code == 0 and top else self.root
+        aside = self.keep_out(cwd)
+        # A folder with nothing git tracks has nothing for these to match: that is no error.
+        nothing = r"nothing to commit|nothing added|no changes added|did not match any file"
+        left_out, add = [], ["add", "-u", "--", ".", *aside]
         if mode == "all":
-            left_out = [one for one in self.new_files() if SECRET_LIKE.search(one)]
+            left_out = [one for one in self.new_files(cwd) if SECRET_LIKE.search(one)]
             # Past forty such files they are no longer a few keys to step around: only tracked files are taken.
             if len(left_out) <= 40:
-                add = ["add", "-A", "--", ".", *[f":(exclude,literal){one}" for one in left_out]]
-        code, out, err = self.git(*add)
-        if code != 0:
+                add = ["add", "-A", "--", ".", *aside, *[f":(exclude,literal){one}" for one in left_out]]
+        code, out, err = self.git(*add, cwd=cwd)
+        if code != 0 and not re.search(nothing, out + err, re.I):
             return (err or out).split("\n")[0] or "git add failed", []
-        code, out, err = self.git("commit", "-q", "-m", message, "--", ".")
-        if code != 0 and not re.search(r"nothing to commit|nothing added|no changes added", out + err, re.I):
+        code, out, err = self.git("commit", "-q", "-m", message, "--", ".", *aside, cwd=cwd)
+        if code != 0 and not re.search(nothing, out + err, re.I):
             return (err or out).split("\n")[0] or "the commit failed", []
         return "", left_out
 
@@ -992,15 +1080,33 @@ class Board:
             code, _, _ = self.git("cat-file", "-e", f"{target['commit']}^{{commit}}")
             if code != 0:
                 return {"ok": False, "error": f"commit {target['commit'][:7]} is not in this repository"}
-            chat_path = os.path.join(self.root, self.chat)
-            chat_text = None
-            try:
-                with open(chat_path, encoding="utf-8") as handle:
-                    chat_text = handle.read()
-            except OSError:
-                pass
-            # What is here now is kept first, new files too: this commit stays behind under a tag, off the branch.
-            error, _ = self.commit_folder(f"Before returning to checkpoint: {target['title']}", "all")
+            # The chat log and its archives are this machine's: read now, written back after the reset.
+            chat_kept = {}
+            for one in self.chat_files():
+                try:
+                    with open(one, encoding="utf-8") as handle:
+                        chat_kept[one] = handle.read()
+                except (OSError, ValueError):
+                    pass
+            code, top, _ = self.git("rev-parse", "--show-toplevel")
+            top = top if code == 0 and top else self.root
+            # The reset below is of the whole repository. A file git does not hold now, which the save point holds,
+            # would be written over with nothing kept (a file left out of every commit, a secret among them): the
+            # return waits until it is moved away. The record and the chat log are put back by this route itself.
+            code, held, _ = self.git("ls-tree", "-r", "--name-only", "-z", "--full-tree", target["commit"])
+            code_now, known, _ = self.git("ls-files", "-z", cwd=top)
+            if code != 0 or code_now != 0:
+                return {"ok": False, "error": "git could not list the save point's files; nothing was changed"}
+            known = set(known.split("\0"))
+            own = {os.path.realpath(self.record_path()), *[os.path.realpath(one) for one in chat_kept]}
+            at_risk = [one for one in held.split("\0") if one and one not in known and os.path.lexists(os.path.join(top, one))
+                       and os.path.realpath(os.path.join(top, one)) not in own]
+            if at_risk:
+                names = ", ".join(at_risk[:3]) + (" and more" if len(at_risk) > 3 else "")
+                return {"ok": False, "error": f"the save point would write over files git does not hold now ({names}); move them away first"}
+            # What is here now is kept first, all of the repository and new files too: this commit stays behind under
+            # a tag, off the branch.
+            error, _ = self.commit_folder(f"Before returning to checkpoint: {target['title']}", "all", whole=True)
             if error:
                 return {"ok": False, "error": error}
             stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
@@ -1024,10 +1130,12 @@ class Board:
                 "status": "done", "doneAt": now, "to": {"world": target["world"], "level": target["level"]},
             })
             write_json(self.record_path(), record)
-            if chat_text is not None:
+            for one, text in chat_kept.items():
+                if not self.inside(one):
+                    continue
                 try:
-                    with open(chat_path, "w", encoding="utf-8") as handle:
-                        handle.write(chat_text)
+                    with open(one, "w", encoding="utf-8") as handle:
+                        handle.write(text)
                 except OSError:
                     pass
         self.prompt({"text": f"I returned the project to a save point (commit {target['commit'][:7]}) from the board; the state before is kept as the git tag {kept}. Re-read the files you rely on before going on."})
@@ -1164,6 +1272,10 @@ def make_handler(board):
             its own Origin; a stray tool would send neither name."""
             if (self.headers.get("Sec-Fetch-Site") or "").strip().lower() == "cross-site":
                 return False
+            # Another user of this machine, known as such, is refused whatever the call carries: a pass read off a
+            # command line, or a key come by some other way, is of no use to them.
+            if is_foreign(peer_uid(self.client_address, board.port), os.getuid() if hasattr(os, "getuid") else None):
+                return False
             origin = self.headers.get("Origin")
             if origin is not None:
                 return board.local_origin(origin)
@@ -1181,6 +1293,15 @@ def make_handler(board):
             self.send_json({"ok": False, "error": "the board's key is missing or not this board's"}, 401)
 
         def do_GET(self):
+            try:
+                self.answer_get()
+            except Exception as error:  # noqa: BLE001 - a file of an odd shape is one answer, never a dead connection
+                try:
+                    self.send_json({"ok": False, "error": f"{type(error).__name__}: {error}"}, 500)
+                except OSError:
+                    pass
+
+        def answer_get(self):
             route = urlparse(self.path).path
             # The page and its icon are the same for everyone and may be reached from a link or a frame on another
             # site (the editor's own browser is one): a local Host is all they ask. The rest is the page's own calls.

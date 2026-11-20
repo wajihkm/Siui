@@ -10,6 +10,8 @@ done here the right way on every platform, Windows included.
                                               there, 1 when nothing does
     launch.py pass <run>                      writes a one-time pass into the run folder and prints it: the page
                                               opened with it in its address trades it for the board's key
+    launch.py open <run> <port>               opens the board in the person's browser with a fresh pass; exit 1
+                                              when no browser could be opened (the pass is then removed)
     launch.py move <from> <to>                renames one file over another in one step
     launch.py remove <path>...                removes files; a missing one is fine
 
@@ -122,6 +124,75 @@ def make_pass(run):
     return 0
 
 
+def is_wsl():
+    try:
+        with open("/proc/version", encoding="utf-8") as handle:
+            return "microsoft" in handle.read().lower()
+    except OSError:
+        return False
+
+
+def open_board(run, port):
+    """Opens the board with a one-time pass. An address given to a program is seen, for a moment, by whoever can
+    list this machine's processes, so the pass travels the way each system keeps it private:
+
+    - Windows, and Windows' browser from WSL: in the address; a command line there is its own user's to see.
+    - macOS: in a small page of the run folder (the user's alone) that sends the browser on; only the page's path
+      is on a command line.
+    - Linux: in the address, since a browser packed as a snap cannot read the run folder; the server refuses a pass
+      or a key from another user there, whom the kernel names.
+
+    When nothing could be opened the pass is removed, so none is left waiting for whoever finds it."""
+    try:
+        port = int(port)
+    except ValueError:
+        return 1
+    if folder(run) != 0:
+        return 1
+    made = secrets.token_urlsafe(32)
+    waiting = os.path.join(run, "pass")
+    try:
+        handle = os.open(waiting + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="ascii") as out:
+            json.dump({"pass": made, "at": time.time()}, out)
+        os.replace(waiting + ".new", waiting)
+    except OSError:
+        return 1
+    url = f"http://127.0.0.1:{port}/?p={made}"
+
+    def ran(command):
+        try:
+            return subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    opened = False
+    if IS_WINDOWS:
+        try:
+            os.startfile(url)  # noqa: S606 - an address of this machine, handed to the user's own browser
+            opened = True
+        except OSError:
+            opened = False
+    elif is_wsl():
+        opened = ran(["wslview", url]) or ran(["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"]) or ran(["xdg-open", url])
+    elif sys.platform == "darwin":
+        page = os.path.join(run, "open.html")
+        try:
+            handle = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                out.write(f'<!doctype html><meta charset="utf-8"><title>Siui</title><meta http-equiv="refresh" content="0;url={url}">'
+                          f'<p><a href="{url}">Open the board</a></p>\n')
+            opened = ran(["open", page])
+        except OSError:
+            opened = False
+    else:
+        opened = ran(["xdg-open", url])
+    if not opened:
+        remove([waiting, os.path.join(run, "open.html")])
+        return 1
+    return 0
+
+
 def move(source, target):
     try:
         os.replace(source, target)
@@ -150,6 +221,8 @@ def main():
         return probe(args[1], args[2])
     if verb == "pass" and len(args) == 2:
         return make_pass(args[1])
+    if verb == "open" and len(args) == 3:
+        return open_board(args[1], args[2])
     if verb == "move" and len(args) == 3:
         return move(args[1], args[2])
     if verb == "remove":

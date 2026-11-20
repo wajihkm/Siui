@@ -31,7 +31,7 @@ import {
 } from './board'
 import { drawCard } from './card'
 import { appendChat } from './chat'
-import { forkRoads, looksSecret, mergeRoads, newFiles, saveCheckpoint, switchRoad } from './checkpoint'
+import { forkRoads, keepOutOfCommits, looksSecret, mergeRoads, newFiles, saveCheckpoint, switchRoad } from './checkpoint'
 import type { RunFork, SaveMode } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
@@ -41,7 +41,7 @@ import { claimPending, resetCost, setCostTarget, settleCost } from './cost'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
 import { mapSvg } from './map'
-import { findPack, readPlan } from './pack'
+import { findPack, packCandidates, readPlan } from './pack'
 import {
   ASK_REPLACED,
   DONE_DESCRIPTION,
@@ -312,7 +312,7 @@ async function openBoard($: EngineInterface, root: string): Promise<string> {
     : `Board at ${url}, not opened: no browser was found. Run /siui board link for a link that opens it with its key. Cards are answered there while the page is open.`
 }
 
-/** The link that holds the board's key, for a bookmark or the editor's own browser: `/siui board link`. */
+/** The link that holds the board's key, for the editor's own browser: `/siui board link`. It lasts as long as the server does. */
 async function boardLink($: EngineInterface, root: string): Promise<string> {
   const paths = await boardPaths($, root)
   const made = await readConfig($, root)
@@ -323,7 +323,7 @@ async function boardLink($: EngineInterface, root: string): Promise<string> {
   const link = await keyLink($, paths, port)
 
   return link
-    ? `The board's link, with its key: ${link}\nIt is for a bookmark or the editor's own browser. Keep it to yourself: whoever holds it can answer your cards and write to this chat.`
+    ? `The board's link, with its key: ${link}\nIt is for the editor's own browser, or any browser /siui board did not open. It works until the board's server stops; the next start makes a new key. Keep it to yourself: whoever holds it can answer your cards and write to this chat.`
     : `The board's key was not found in ${paths.run}; run /siui board off, then /siui board.`
 }
 
@@ -417,6 +417,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     const pack = rest[0]
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     let packPath: string | undefined
     if (pack) {
       const record = await readRecord($, root, config.record)
@@ -427,7 +428,10 @@ async function runCommand($: EngineInterface, e: { args: string }) {
       const nextWorld = record.runs.reduce((most, one) => Math.max(most, one.world), 0) + 1
       const run = ensureRun(record, targetOf(root), pack, nextWorld, new Date().toISOString())
       const plan = await readPlan($, pack, root, config.packs)
-      packPath = await findPack($, pack, root, config.packs)
+      // The path goes into the prompt only from a place the plugin knows by itself. A folder the project's
+      // configuration names could be named with a sentence for the assistant.
+      const found = await findPack($, pack, root, config.packs)
+      packPath = found !== undefined && packCandidates(pack, root, (await homeOf($)) ?? '', $.plugin.root, []).includes(found) ? found : undefined
       if (plan.length > 0) run.plan = plan
       await writeRecord($, root, record, config.record)
     }
@@ -570,7 +574,13 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     if (!dropped) return { text: 'Nothing to take back in this world yet.' }
     await writeRecord($, root, record, config.record)
     await update($, history, list => list.filter(one => !(one.level === dropped.level && one.id === dropped.id)))
-    void $.prompt.submit({ text: `Present the card ${dropped.level}/${dropped.id} (${dropped.title}) again, with no text before it.` })
+    // The card is named by its ids: its title is the record's text, and a prompt is read as the person's words.
+    const named = isLevel(dropped.level) && /^[a-z0-9-]{1,60}$/.test(dropped.id)
+    void $.prompt.submit({
+      text: named
+        ? `Present the card ${dropped.level}/${dropped.id} again, with no text before it.`
+        : 'I took back the last card I answered: present it again, with no text before it.',
+    })
 
     return { text: `Took back ${dropped.level}/${dropped.id}.` }
   }
@@ -649,6 +659,7 @@ export const register: Register = on => {
     const root = await $.session.root()
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     const wasOn = (await $.store.get(storeKey(root))) === true
     await update($, isOn, () => wasOn)
     setMode(wasOn)
@@ -759,12 +770,21 @@ export const register: Register = on => {
       // Nothing is written into a project while game mode is off: no chat log, no mark, no cost.
       const isPlaying = await read($, isOn)
       if (isPlaying) {
-        await appendChat($, root, config.chatLog, {
-          world: where?.world ?? null,
-          level: where?.level ?? '',
-          user,
-          assistant: e.reason === 'refusal' ? '' : e.answer,
-        })
+        // The ignore file beside the log is made sure of once per project on this machine: the run folder remembers.
+        const runFolder = (await boardPaths($, root)).run
+        const ignoreDone = (await launch($, ['folder', runFolder])).exitCode === 0 ? `${runFolder}/ignore-written` : undefined
+        await appendChat(
+          $,
+          root,
+          config.chatLog,
+          {
+            world: where?.world ?? null,
+            level: where?.level ?? '',
+            user,
+            assistant: e.reason === 'refusal' ? '' : e.answer,
+          },
+          ignoreDone,
+        )
       }
       // A turn that did work after an answer marks that answer built: the board then offers no queue for it.
       if (isPlaying && turnHadWork && (await read($, card)) === null) {
@@ -1010,6 +1030,7 @@ export const register: Register = on => {
     // The configuration is read afresh on every card: the board may have switched the universe meanwhile.
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     const made = normaliseCard(e as unknown as Record<string, unknown>, config.caps)
     if (typeof made === 'string') return { deny: `card: ${made}` }
 

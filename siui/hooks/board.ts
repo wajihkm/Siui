@@ -286,24 +286,7 @@ async function whoServes($: EngineInterface, paths: BoardPaths, port: number): P
   return probe.exitCode === 0 ? 'ours' : probe.exitCode === 3 ? 'other' : 'nothing'
 }
 
-/**
- * A one-time pass for the page, written into the run folder by the launcher.
- * The address the browser is opened with holds the pass, not the key: an
- * address is seen for a moment by whoever lists this machine's processes,
- * and a pass works once.
- */
-async function makePass($: EngineInterface, paths: BoardPaths): Promise<string> {
-  try {
-    const made = await launch($, ['pass', paths.run], 5_000)
-    const pass = made.stdout.trim()
-
-    return made.exitCode === 0 && /^[A-Za-z0-9_-]{32,128}$/.test(pass) ? pass : ''
-  } catch {
-    return ''
-  }
-}
-
-/** The address that holds the board's key itself, for a bookmark or the editor's own browser; '' when the key is not there. */
+/** The address that holds the board's key itself, for the editor's own browser; '' when the key is not there. */
 export async function keyLink($: EngineInterface, paths: BoardPaths, port: number): Promise<string> {
   try {
     const key = (await $.fs.read(paths.key)).trim()
@@ -314,26 +297,19 @@ export async function keyLink($: EngineInterface, paths: BoardPaths, port: numbe
   }
 }
 
-/** Opens the page in the user's browser, with a one-time pass for the board's key: Windows' default from WSL, else the desktop's. */
+/**
+ * Opens the page in the user's browser with a one-time pass for the board's
+ * key. The launcher does it: it knows each system's way to keep the pass
+ * from other users of the machine (in the address on Windows and from WSL, in
+ * a page of the run folder on macOS), and it removes the pass when no browser
+ * could be opened.
+ */
 export async function openBrowser($: EngineInterface, paths: BoardPaths, port: number): Promise<boolean> {
-  const pass = await makePass($, paths)
-  const url = `http://127.0.0.1:${port}/${pass ? `?p=${pass}` : ''}`
-  const tries: string[][] = [
-    ['wslview', url],
-    ['powershell.exe', '-NoProfile', '-Command', `Start-Process '${url}'`],
-    ['xdg-open', url],
-    ['open', url],
-  ]
-  for (const argv of tries) {
-    try {
-      const ran = await $.process.run(argv, { timeoutMs: 15_000 })
-      if (ran.exitCode === 0) return true
-    } catch {
-      // the next opener
-    }
+  try {
+    return (await launch($, ['open', paths.run, String(port)], 70_000)).exitCode === 0
+  } catch {
+    return false
   }
-
-  return false
 }
 
 /** Publishes the live card for the page, or clears it. */

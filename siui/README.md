@@ -47,8 +47,7 @@ there opens the explanation. The record grows in `.claude/decisions.json`.
 - `/siui status` draws the world map: the levels along a path, done, current and ahead,
   with the answers under each, and ends with the next card to present.
 - `/siui board [link|off]` opens the board in the browser; `link` prints the address that
-  holds the board's key, for a bookmark or the editor's own browser; `off` stops its
-  server.
+  holds the board's key, for the editor's own browser; `off` stops its server.
 - `/siui pane [off]` opens the same map in a pane beside the chat that redraws after every
   decision (in VS Code the pane sits above the prompt); `off` closes it.
 - `/siui auto [on|off]` switches auto-pilot; without a word it toggles.
@@ -136,8 +135,8 @@ its page in the browser. The page shows, top to bottom:
   `.claude/exports/roadmap-<date>-<time>.<ext>`: a standalone HTML page (the roadmap,
   every world's map and its decisions, folded), a Markdown report (a section per world, a
   table per stage) or an SVG poster (the roadmap drawing alone), in the universe's words
-  and colours; opening the page at `/#export=html`, `md` or `svg` runs one export at
-  once, for a script.
+  and colours; opening the key's link with `#export=html`, `md` or `svg` at its end runs
+  one export at once, for a script.
 
 While the page is open, cards are answered on it: the live card shows with its options,
 and the chat only says the card is waiting on the board; the ⌨ switch keeps them in the
@@ -148,15 +147,23 @@ header covers decisions, marks, levels, worlds and chat turns.
 
 The server is the Python 3 standard library, bound to 127.0.0.1, and it answers only to
 the holder of the board's key: a random value in the run folder, which you alone can
-read. Another program or another person on the machine can reach the port, but can
-neither read the board nor answer a card nor write to your chat. `/siui board` opens the
-page with a one-time pass, the page trades it for the key, and the browser keeps the key,
-so the plain address works in that browser from then on; a browser that was never given
-the key says so and names the command. A call also needs a localhost Origin or Host, and
-a POST a JSON content type, so no website can reach it; the page is sent with a content
-security policy that runs its own two scripts and nothing else. What a project's files
-say (the record, a card, a universe file) is drawn as text and never as markup, and a
-prompt the board sends to the chat carries ids, not titles.
+read, made anew each time the server starts. Another program or another person on the
+machine can reach the port, but can neither read the board nor answer a card nor write to
+your chat; on Linux a call from another user is refused whatever it carries.
+`/siui board` opens the page with a one-time pass, the page trades it for the key, and
+the browser keeps the key, so the plain address works in that browser until the server
+stops; a browser without the key says so and names the command. A call also needs a
+localhost Origin or Host, and a POST a JSON content type, so no website can reach it; a
+board framed by another site takes no key; and the page is sent with a content security
+policy that runs its own two scripts and nothing else. What a project's files say (the
+record, a card, a universe file) is drawn as text and never as markup, a prompt the
+board sends to the chat carries ids and never a title or a path, and nothing is written
+through a link that leads out of the project.
+
+`SIUI_KEEP_KEY=1` in your own environment keeps one key across starts, so a bookmark or
+a key binding with the key's link keeps working. Use it only on a machine that is yours
+alone: between two starts the port is free, and whoever takes it is handed what your
+browser kept for that address.
 Runtime files (the key, the live card, the inboxes, the liveness marks) live under
 `~/.cache/siui/<project>/`, made 0700 (on Windows `%LOCALAPPDATA%\siui\<project>\`), never in the project. `/siui board off`
 stops the server; it also stops by itself a few minutes after the session ends.
@@ -166,9 +173,10 @@ To have the board inside VS Code instead of the browser, open it in the Simple B
 the command palette, "Simple Browser: Show", then the address; or a key bound to
 `simpleBrowser.show` with the address as its argument. Nothing on the command line can
 open that view, so the plugin opens the system browser. The Simple Browser needs the key
-once, like any browser: `/siui board link` prints the address that holds it, and that is
-the address to give the palette or the key binding. The link is as good as the key: keep
-it to yourself.
+like any browser: `/siui board link` prints the address that holds it, and that is the
+address to give the palette. The key is new at each start of the server, so the link is
+too, unless you set `SIUI_KEEP_KEY=1` (above); then the link can go into the key binding
+once. The link is as good as the key: keep it to yourself.
 
 ## Packs
 
@@ -183,7 +191,7 @@ and quality of a new project, then the boss creates the files decided.
 
 `/siui on <pack>` looks for the pack in four places, in order: the project's
 `.claude/skills/decision-cards/packs/`, the folders the configuration names under `packs`
-(relative to the project, or absolute), the plugin's `packs/`, then
+(inside the project, relative to it), the plugin's `packs/`, then
 `~/.claude/skills/decision-cards/packs/`. The number in a pack's name is a suggestion; a
 run takes the project's next world number.
 
@@ -308,8 +316,9 @@ cost so far, how full the context window is, and each rate-limit window with its
 - `record` moves the decisions file; `chatLog` moves the chat log; both stay inside the
   project.
 - `caps` lowers a field cap (never raises one: the dialog allows 48 rows).
-- `packs` adds up to eight folders where `/siui on <pack>` looks for packs, after the
-  project's skill folder and before the plugin's bundled one.
+- `packs` adds up to eight folders of the project where `/siui on <pack>` looks for packs,
+  after the project's skill folder and before the plugin's bundled one. A folder outside
+  the project is not taken: packs shared between projects go in the home folder's skill.
 - `boardPort` is the board server's first port (1024 to 65535).
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
 - `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
@@ -355,10 +364,12 @@ question lists them, and the answer is kept in the run folder, outside the proje
 file whose name looks like a secret (`.env`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`,
 `credentials.json` and the like) is never added; `git add` it yourself when it belongs.
 In a larger repository the other folders, and what you staged there, are left alone, and
-in the middle of a merge or a rebase no save point is made. "Return here" on the board
-commits and tags what is there now (`checkpoints/before-<time>`, new files too, so
-nothing is lost), resets the tree to the save point, puts the record and the chat log
-back, and tells the chat.
+in the middle of a merge or a rebase no save point is made. The chat log is never part of
+one. "Return here" on the board commits and tags what is there now, all of the
+repository and new files too (`checkpoints/before-<time>`, so nothing is lost), resets
+the tree to the save point, puts the record and the chat log back, and tells the chat.
+It waits when the save point would write over a file git does not hold now, until you
+move that file away.
 
 ## Developing
 
