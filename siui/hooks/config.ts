@@ -11,7 +11,7 @@ import { CAPS } from './input'
 import { RECORD_PATH } from './record'
 import type { Words } from './words'
 import { DEFAULT_WORDS } from './words'
-import { isAbsolute, join, setPython, trimEnd } from './paths'
+import { isAbsolute, join, trimEnd } from './paths'
 
 export const CONFIG_PATH = '.claude/siui.json'
 
@@ -64,15 +64,9 @@ export async function readConfig($: EngineInterface, root: string): Promise<Game
   const made = defaultConfig()
   const base = trimEnd(root)
   const path = join(base, CONFIG_PATH)
-  if (!(await $.fs.exists(path))) {
-    setPython(undefined)
-
-    return made
-  }
+  if (!(await $.fs.exists(path))) return made
   try {
     const parsed = JSON.parse(await $.fs.read(path)) as Record<string, unknown>
-    // `python` names the command that runs Python 3, when the usual names do not: "py -3", or a full path.
-    setPython(typeof parsed.python === 'string' ? parsed.python : undefined)
     const theme = parsed.theme && typeof parsed.theme === 'object' ? (parsed.theme as Record<string, unknown>) : {}
     const universe = typeof theme.universe === 'string' ? theme.universe.trim() : ''
     if (universe !== '' && UNIVERSE_NAME.test(universe)) made.universe = universe

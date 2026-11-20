@@ -36,7 +36,7 @@ every command, the board, the universes, the record and the configuration.
 - A current Claude Code (the plugin API is early-access and the board was built on
   2.1.310): the VS Code extension, the desktop app or the terminal.
 - Python 3 on PATH, for the board (standard library only): `python3`, `python` or
-  `py -3`, the first that answers; `python` in the configuration names another.
+  `py -3`, the first that answers; `SIUI_PYTHON` in your environment names another.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
 - Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through

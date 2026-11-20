@@ -32,7 +32,7 @@ there opens the explanation. The record grows in `.claude/decisions.json`.
 - A current Claude Code (the plugin API is early-access and the board was built on
   2.1.310).
 - Python 3 on PATH, for the board (standard library only): `python3`, `python` or
-  `py -3`, the first that answers; `python` in the configuration names another.
+  `py -3`, the first that answers; `SIUI_PYTHON` in your environment names another.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
 - Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
@@ -293,8 +293,6 @@ cost so far, how full the context window is, and each rate-limit window with its
 - `packs` adds up to eight folders where `/siui on <pack>` looks for packs, after the
   project's skill folder and before the plugin's bundled one.
 - `boardPort` is the board server's first port (1024 to 65535).
-- `python` names the command that runs Python 3 when the usual names do not: `"py -3"`,
-  or a full path.
 - `extended` set to `false` turns the stage, the "extended game mode", off on the board.
 - `hiddenPacks` names the packs the roadmap does not draw as planned worlds; the board's
   Hide button on a planned world writes it, its hidden button clears it.
