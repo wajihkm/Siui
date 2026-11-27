@@ -1,5 +1,11 @@
 # <img src="icon.svg" alt="" width="32"> Siui
 
+> **Status: beta.** Siui works day to day for its author, but it has no test suite yet, and
+> a review in November 2026 found security and data-safety issues that are being fixed.
+> Until 1.3.0, use it on your own machine and only with projects you trust: do not open the
+> board on a repository you did not write, and expect a save point to commit everything in
+> the project's folder.
+
 Siui, Super intelligent Ui: a Claude Code plugin. It gives the model one way to ask: a
 decision card. The card is drawn inside Claude Code's own question dialog, so it works
 wherever that dialog works: the VS Code extension, the desktop app, the terminal.
