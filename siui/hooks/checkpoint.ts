@@ -1,12 +1,43 @@
-// Checkpoints: save points on a stage. A checkpoint is a git commit of the
-// whole working tree; the board's server returns the tree to one on its own
-// (it commits and tags what is there first, so nothing is lost). Forks make
-// two branches from a checkpoint, roads a and b, one on disk at a time; the
-// castle merges the road kept and tags the other.
+// Checkpoints: save points on a stage. A save point is a snapshot of the
+// project's folder kept aside, under a ref of Siui's own: the branch does not
+// move and the list of changes stays as it is. The board's server returns the
+// folder's files to one on its own, keeping what was there as a git stash
+// entry. Only the end of a world commits to the branch, as the person chose.
+// Forks make two branches from a commit, roads a and b, one on disk at a
+// time; the castle merges the road kept and tags the other.
+//
+// What a save point or such a commit takes is bounded: the project's folder
+// alone, though the repository may be larger; the files git tracks, and new
+// ones only when the person agreed (`all`); never a file whose name looks
+// like a secret; nothing at all in the middle of a merge or a rebase.
 
 import type { EngineInterface } from 'claude-code'
 
+import { CHAT_PATH } from './chat'
+import { join, launch } from './paths'
 import { timeSuffix } from './record'
+
+/** How a save point treats files git does not know yet: all of them, or only the files it tracks. */
+export type SaveMode = 'all' | 'tracked'
+
+/** Names that look like secrets: a save point never adds one; `git add` it by hand when it belongs in the repository. */
+const SECRET_LIKE = new RegExp(
+  [
+    '(^|/)\\.env($|[._-])|(^|/)\\.envrc$|\\.env$',
+    '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$|\\.tfvars\\.json$',
+    '(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$',
+    '(^|/)\\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\\.docker/config\\.json$|(^|/)kubeconfig$',
+    '(^|/)\\.?(credentials?|secrets?)(\\.(json|ya?ml|toml|ini|env|txt|xml|properties|cfg|conf|csv))?$',
+    '(^|/)client[-_]secret[^/]*\\.(json|ya?ml|p12|pem|key|txt)$|(^|/)[^/]*service[-_]?account[^/]*\\.(json|p12|pem|key)$',
+  ].join('|'),
+  'i',
+)
+/** What the list above would take but is made to be shared: a sample of an env file, a public key. */
+const SHARED_LIKE = /(^|\/)\.env[._-](example|sample|template|dist|defaults?)$|(^|\/)(example|sample|template)[^/]*\.env$|\.pub$/i
+
+export function looksSecret(path: string): boolean {
+  return SECRET_LIKE.test(path) && !SHARED_LIKE.test(path)
+}
 
 export type GitResult = { exitCode: number; stdout: string; stderr: string }
 
@@ -37,6 +68,9 @@ export async function git($: EngineInterface, root: string, args: readonly strin
     const ran = await $.process.run(['git', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...identity, ...args], {
       cwd: root,
       timeoutMs: 60_000,
+      // In English, whatever the person's language: what git says is read here ("nothing to commit"). The engine
+      // sets these over the host's own environment (ProcessRunInit.env), so PATH and HOME stay.
+      env: { LANGUAGE: 'en', LC_MESSAGES: 'C' },
     })
 
     return { exitCode: ran.exitCode, stdout: ran.stdout.trim(), stderr: ran.stderr.trim() }
@@ -45,24 +79,176 @@ export async function git($: EngineInterface, root: string, args: readonly strin
   }
 }
 
-/** Commits everything as a checkpoint; resolves the commit and branch, or an error line. */
+/** The files a save point would add: not tracked, not ignored, under the project's folder; secret-looking names first. */
+export async function newFiles($: EngineInterface, root: string): Promise<string[]> {
+  const listed = await git($, root, ['ls-files', '--others', '--exclude-standard', '-z', '--', '.'])
+  if (listed.exitCode !== 0) return []
+  const paths = listed.stdout.split('\0').filter(one => one !== '')
+
+  return [...paths.filter(looksSecret), ...paths.filter(one => !looksSecret(one))]
+}
+
+/** What git is in the middle of, which a commit now would end wrongly: a merge, a rebase, a pick, a revert; '' when nothing. */
+export async function busyWith($: EngineInterface, root: string): Promise<string> {
+  const dir = await git($, root, ['rev-parse', '--absolute-git-dir'])
+  if (dir.exitCode !== 0 || dir.stdout === '') return ''
+  const marks: Array<[string, string]> = [
+    ['MERGE_HEAD', 'a merge'],
+    ['rebase-merge', 'a rebase'],
+    ['rebase-apply', 'a rebase'],
+    ['CHERRY_PICK_HEAD', 'a cherry-pick'],
+    ['REVERT_HEAD', 'a revert'],
+    ['BISECT_LOG', 'a bisect'],
+  ]
+  for (const [name, what] of marks) {
+    if (await $.fs.exists(join(dir.stdout, name))) return what
+  }
+
+  return ''
+}
+
+/**
+ * Commits the project's folder: the files git tracks, and with `all` the new
+ * ones too, except any whose name looks like a secret; never the chat log.
+ * The commit is of this folder alone: in a larger repository the other
+ * folders, and what is staged there, stay as they are. Refused in the middle
+ * of a merge or a rebase, which such a commit would conclude. Resolves the
+ * secret-looking files left out, or an error line; nothing to commit is no
+ * error.
+ */
+export async function commitFolder(
+  $: EngineInterface,
+  root: string,
+  message: string,
+  mode: SaveMode,
+): Promise<{ leftOut: string[] } | { error: string }> {
+  const busy = await busyWith($, root)
+  if (busy !== '') return { error: `git is in the middle of ${busy}; finish it first` }
+  // A folder with nothing git tracks has nothing for these to match: that is no error.
+  const nothing = /nothing to commit|nothing added|no changes added|did not match any file/i
+  // The chat log's path is kept out only as a file: aimed at a folder it would leave that folder out of every commit.
+  let aside = keptOut
+  try {
+    if (logPath !== '' && (await $.fs.exists(join(root, logPath))) && (await $.fs.stat(join(root, logPath))).kind !== 'file') aside = []
+  } catch {
+    // not there, or not to be read: nothing of it to commit either
+  }
+  // git refuses an add that names something it ignores, even to leave it out: the log by its path, and the
+  // archives' pattern when their whole folder is ignored (any name in it then is, a made-up one too). What git
+  // ignores it cannot take, so each is named only while git could take it.
+  if (logPath !== '' && aside.length > 0) {
+    const cut = logPath.lastIndexOf('/')
+    const probe = `${cut > 0 ? logPath.slice(0, cut + 1) : ''}.siui-no-such-file`
+    if ((await git($, root, ['check-ignore', '-q', '--', logPath])).exitCode === 0) aside = aside.filter(one => !one.startsWith(':(exclude,literal)'))
+    if ((await git($, root, ['check-ignore', '-q', '--', probe])).exitCode === 0) aside = aside.filter(one => !one.startsWith(':(exclude,glob)'))
+  }
+  let leftOut: string[] = []
+  let add = ['add', '-u', '--', '.', ...aside]
+  if (mode === 'all') {
+    leftOut = (await newFiles($, root)).filter(looksSecret)
+    // Past forty such files they are no longer a few keys to step around: only tracked files are taken.
+    if (leftOut.length <= 40) add = ['add', '-A', '--', '.', ...aside, ...leftOut.map(one => `:(exclude,literal)${one}`)]
+  }
+  const added = await git($, root, add)
+  if (added.exitCode !== 0 && !nothing.test(`${added.stdout}\n${added.stderr}`)) return { error: added.stderr.split('\n')[0] || 'git add failed' }
+  const committed = await git($, root, ['commit', '-q', '-m', message, '--', '.', ...aside])
+  if (committed.exitCode !== 0 && !nothing.test(`${committed.stdout}\n${committed.stderr}`)) {
+    return { error: committed.stderr.split('\n')[0] || 'the commit failed' }
+  }
+
+  return { leftOut }
+}
+
+/**
+ * The pathspecs that keep the chat log and its dated archives out of every
+ * commit made here, whether git tracks them or not: the log holds the
+ * person's prompts, and a repository can ship one already tracked. Set from
+ * the configuration when it is read.
+ */
+let keptOut: string[] = []
+let logPath = ''
+
+export function keepOutOfCommits(chatLog: string): void {
+  const log = chatLog.replace(/^\.?\//, '')
+  // The configuration takes only a name ending in .jsonl; anything else here is kept out of nothing.
+  if (!log.endsWith('.jsonl')) {
+    keptOut = []
+    logPath = ''
+
+    return
+  }
+  logPath = log
+  keptOut = [`:(exclude,literal)${log}`, `:(exclude,glob)${log.replace(/\.jsonl$/, '').replace(/[*?[\]\\]/g, '\\$&')}-*.jsonl`]
+}
+keepOutOfCommits(CHAT_PATH)
+
+/** Whether a name read from the record is a plain branch name, never an option: `main`, `feature/x`, `fork/2-2-a`. */
+export function isBranchName(name: unknown): name is string {
+  return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(name) && !name.includes('..')
+}
+
+/** Whether a fork read from the record names its own two roads and a plain base: what goes to git is checked first. */
+function isSoundFork(fork: RunFork): boolean {
+  return (
+    /^\d+-\d+$/.test(fork.level) &&
+    isBranchName(fork.base) &&
+    fork.branches?.a === `fork/${fork.level}-a` &&
+    fork.branches?.b === `fork/${fork.level}-b` &&
+    (fork.onDisk === 'a' || fork.onDisk === 'b')
+  )
+}
+const UNSOUND = 'the record names this fork with a branch that is not one of its own'
+
+
+/**
+ * Takes a save point through the launcher, which holds the one tested way to
+ * do it, the board's own. `aside` keeps a snapshot of the folder under a ref
+ * of Siui's own and leaves the branch, the index and the list of changes as
+ * they are. `commit` commits the folder to the branch: the end of a world.
+ * Resolves the commit, the branch and the files left out, or an error line.
+ */
+export async function savePoint(
+  $: EngineInterface,
+  root: string,
+  run: string,
+  chatLog: string,
+  title: string,
+  mode: SaveMode,
+  how: 'aside' | 'commit',
+): Promise<{ commit: string; branch: string; leftOut: string[] } | { error: string }> {
+  try {
+    const ran = await launch($, ['save', root, run, chatLog, mode, how, title], 120_000)
+    const last = ran.stdout.trim().split('\n').pop() ?? ''
+    const made = JSON.parse(last === '' ? '{}' : last) as { error?: unknown; commit?: unknown; branch?: unknown; leftOut?: unknown }
+    if (typeof made.error === 'string' && made.error !== '') return { error: made.error }
+    if (typeof made.commit !== 'string' || !/^[0-9a-f]{7,64}$/.test(made.commit)) return { error: 'the save point was not made' }
+
+    return {
+      commit: made.commit,
+      branch: typeof made.branch === 'string' && made.branch !== '' ? made.branch : 'HEAD',
+      leftOut: Array.isArray(made.leftOut) ? made.leftOut.filter((one): one is string => typeof one === 'string') : [],
+    }
+  } catch (error) {
+    return { error: String(error) }
+  }
+}
+
+/** Commits the project's folder as a checkpoint, for a fork's start; resolves the commit, the branch and the files left out, or an error line. */
 export async function saveCheckpoint(
   $: EngineInterface,
   root: string,
   title: string,
-): Promise<{ commit: string; branch: string } | { error: string }> {
+  mode: SaveMode,
+): Promise<{ commit: string; branch: string; leftOut: string[] } | { error: string }> {
   const inside = await git($, root, ['rev-parse', '--is-inside-work-tree'])
   if (inside.exitCode !== 0) return { error: 'not a git repository' }
-  await git($, root, ['add', '-A'])
-  const committed = await git($, root, ['commit', '-q', '-m', `Checkpoint: ${title}`])
-  if (committed.exitCode !== 0 && !/nothing to commit|nothing added/i.test(`${committed.stdout}\n${committed.stderr}`)) {
-    return { error: committed.stderr.split('\n')[0] || 'the commit failed' }
-  }
+  const committed = await commitFolder($, root, `Checkpoint: ${title}`, mode)
+  if ('error' in committed) return committed
   const sha = await git($, root, ['rev-parse', 'HEAD'])
   const branch = await git($, root, ['rev-parse', '--abbrev-ref', 'HEAD'])
   if (sha.exitCode !== 0) return { error: 'no commit to point at' }
 
-  return { commit: sha.stdout, branch: branch.stdout || 'HEAD' }
+  return { commit: sha.stdout, branch: branch.stdout || 'HEAD', leftOut: committed.leftOut }
 }
 
 /** A fork at a stage: two roads, a and b, each a branch from one checkpoint; one on disk at a time. */
@@ -87,12 +273,12 @@ export async function currentBranch($: EngineInterface, root: string): Promise<s
 }
 
 /** Forks a stage: a checkpoint, then branches fork/<level>-a and -b at it; road a goes on disk. */
-export async function forkRoads($: EngineInterface, root: string, level: string): Promise<RunFork | { error: string }> {
+export async function forkRoads($: EngineInterface, root: string, level: string, mode: SaveMode): Promise<RunFork | { error: string }> {
   const base = await currentBranch($, root)
   // A detached tree has no base to merge back into: the fork would have nowhere to end.
   if (base === 'HEAD') return { error: 'the tree is detached (no branch checked out); check out a branch first' }
   if (/^fork\//.test(base)) return { error: `already on a road (${base}); merge it first` }
-  const saved = await saveCheckpoint($, root, `Fork at ${level}`)
+  const saved = await saveCheckpoint($, root, `Fork at ${level}`, mode)
   if ('error' in saved) return saved
   const branches = { a: `fork/${level}-a`, b: `fork/${level}-b` }
   for (const name of [branches.a, branches.b]) {
@@ -106,9 +292,10 @@ export async function forkRoads($: EngineInterface, root: string, level: string)
 }
 
 /** Switches to the other road: what is on disk is committed on the current road first. */
-export async function switchRoad($: EngineInterface, root: string, fork: RunFork, road: 'a' | 'b'): Promise<{ error: string } | { ok: true }> {
-  await git($, root, ['add', '-A'])
-  await git($, root, ['commit', '-q', '-m', `Road ${fork.onDisk} of ${fork.level}: before switching`])
+export async function switchRoad($: EngineInterface, root: string, fork: RunFork, road: 'a' | 'b', mode: SaveMode): Promise<{ error: string } | { ok: true }> {
+  if (!isSoundFork(fork)) return { error: UNSOUND }
+  const kept = await commitFolder($, root, `Road ${fork.onDisk} of ${fork.level}: before switching`, mode)
+  if ('error' in kept) return kept
   const switched = await git($, root, ['switch', '-q', fork.branches[road]])
   if (switched.exitCode !== 0) return { error: switched.stderr.split('\n')[0] || `could not switch to road ${road}` }
 
@@ -130,9 +317,11 @@ export async function mergeRoads(
   root: string,
   fork: RunFork,
   keep: 'a' | 'b' | 'both',
+  mode: SaveMode,
 ): Promise<{ tag: string; merged: 'a' | 'b' | 'both' } | { error: string }> {
-  await git($, root, ['add', '-A'])
-  await git($, root, ['commit', '-q', '-m', `Road ${fork.onDisk} of ${fork.level}: before the merge`])
+  if (!isSoundFork(fork)) return { error: UNSOUND }
+  const before = await commitFolder($, root, `Road ${fork.onDisk} of ${fork.level}: before the merge`, mode)
+  if ('error' in before) return before
   const kept: 'a' | 'b' = keep === 'b' ? 'b' : 'a'
   const other: 'a' | 'b' = kept === 'a' ? 'b' : 'a'
   const toBase = await git($, root, ['switch', '-q', fork.base])

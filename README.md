@@ -1,5 +1,10 @@
 # <img src="siui/icon.svg" alt="" width="32"> Siui
 
+> **Status: beta.** Siui works day to day for its author. A review in November 2026 found
+> security and data-safety issues. The security findings are addressed and the board has
+> tests; the rest of the data-safety work is under way, and the plugin's own logic has no
+> tests yet. Until 1.3.0, use it on your own machine and with projects you trust.
+
 Siui is the Claude Code plugin marketplace `siui`: mods that are easier on the eyes.
 Siui (Super intelligent Ui) is its plugin: the assistant's questions drawn as decision
 cards, one at a time, in levels and worlds like a game, with a board that maps the run.
@@ -36,7 +41,7 @@ every command, the board, the universes, the record and the configuration.
 - A current Claude Code (the plugin API is early-access and the board was built on
   2.1.310): the VS Code extension, the desktop app or the terminal.
 - Python 3 on PATH, for the board (standard library only): `python3`, `python` or
-  `py -3`, the first that answers; `python` in the configuration names another.
+  `py -3`, the first that answers; `SIUI_PYTHON` in your environment names another.
 - `git`, for checkpoints and forks; without it the cards and the board still work.
 - A browser, for the board.
 - Linux, WSL, macOS or Windows. No Unix shell is needed: the board's steps run through
@@ -61,8 +66,10 @@ every command, the board, the universes, the record and the configuration.
   the board and in the exports; the model and the session's usage beside the chat's state.
 - Auto-pilot: a card with a recommendation is answered with it after a countdown; a boss,
   a bug, a problem or a card without advice waits for you.
-- Checkpoints: save points, a git commit of the whole tree, drawn on the stage; returning
-  to one tags what is there first, so nothing is lost.
+- Checkpoints: save points, a snapshot of the project's folder kept aside from your
+  branch, drawn on the stage; new files only once you agreed, never one that looks like a
+  secret; returning to one brings the files back and keeps what was there as a git stash
+  entry, so nothing is lost.
 - Forks: a stage splits into two roads, each a git branch, the remaining cards asked on
   each; the castle merges the road kept and tags the other.
 - Universes: the board's words, icons, colours and shapes from one set, twelve shipped and

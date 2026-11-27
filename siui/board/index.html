@@ -356,6 +356,14 @@
   .addmark select { padding: 6px 30px 6px 9px; }
   @media (max-width: 700px) { .addmark { grid-template-columns: 1fr 1fr; } }
   dialog#ask, dialog#move { max-width: 440px; }
+  /* A page without the board's key: one calm screen over everything, saying what to do. */
+  #nokey { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--bg); }
+  #nokey[hidden] { display: none; }
+  #nokey .box { max-width: 560px; padding: 28px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  #nokey h2 { margin: 0 0 12px; font-size: 1.35em; }
+  #nokey p { margin: 10px 0 0; line-height: 1.55; }
+  #nokey p.g { color: var(--dim); }
+  #nokey code { padding: 2px 7px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); font-family: ui-monospace, Consolas, monospace; font-size: .95em; white-space: nowrap; }
   dialog#move select { display: block; width: 100%; margin-top: 4px; font-weight: 400; }
   .askform { display: grid; gap: 12px; } .askform .asktext { margin: 0; white-space: pre-line; } .askbtns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog#newworld, dialog#ask, dialog#move, dialog#output { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); padding: 20px 22px; max-width: 520px; width: calc(100% - 40px); box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
@@ -440,6 +448,14 @@
   })();
 </script>
 <body>
+<div id="nokey" hidden role="alertdialog" aria-labelledby="nokeyTitle" aria-describedby="nokeyHow">
+  <div class="box">
+    <h2 id="nokeyTitle">This board needs its key</h2>
+    <p id="nokeyHow">In the chat, run <code>/siui board</code>. It opens the board with its key.</p>
+    <p class="g">For the editor's own browser, run <code>/siui board link</code> and open the link it prints.</p>
+    <p class="g">The key keeps the board yours: without it, nothing else on this machine can read it or write to your chat. It is new each time the board starts.</p>
+  </div>
+</div>
 <header>
   <img class="logo" src="/icon.svg" alt="" width="24" height="24">
   <h1 id="title">Siui</h1>
@@ -491,7 +507,7 @@
 </footer>
 <div class="toast" id="toast"></div>
 <dialog id="info"><div class="infobody"></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
-<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small primary" value="ok">OK</button></div></form></dialog>
+<dialog id="ask"><form method="dialog" class="askform"><p class="asktext"></p><input type="text" class="askinput" hidden autocomplete="off"><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small" type="button" data-alt hidden></button><button class="small primary" value="ok">OK</button></div></form></dialog>
 <dialog id="output"><div class="outbody"><h3 class="title"></h3><div class="user"></div><div class="assistant"></div></div><form method="dialog" style="text-align:right;margin-top:14px"><button class="small primary">Close</button></form></dialog>
 <dialog id="move"><form method="dialog" class="askform"><p class="asktext">Move to</p><label class="nwlabel">World<select name="world"></select></label><label class="nwlabel">Stage<select name="level"></select></label><div class="askbtns"><button class="small" type="button" data-cancel>Cancel</button><button class="small primary" value="ok">Move</button></div></form></dialog>
 <dialog id="newworld">
@@ -634,23 +650,98 @@
   }
 
   /** A POST to the board's server: the parsed body when it answered ok, else null after a toast with its error. */
-  async function post(route, body) {
+  /**
+   * The board's key. The server answers only calls that carry it, so another program or person on this machine, who
+   * can reach the port, cannot read the board or write to the chat. It arrives once, in the address: a one-time pass
+   * that `/siui board` put there (traded for the key), or the key itself in a link the person keeps. It is kept by this
+   * browser for this address and taken out of the address bar at once.
+   */
+  const KEY_STORE = 'siui.key';
+  let boardKey = '', keyMissing = false, cameWithKey = false;
+  const stored = { get: () => { try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; } },
+    set: v => { try { if (v) localStorage.setItem(KEY_STORE, v); else localStorage.removeItem(KEY_STORE); } catch (e) { /* a browser that keeps nothing: the key lasts as long as the page */ } } };
+  /**
+   * Whether another site shows this page inside one of its own. A page on another port of this machine is another
+   * site, yet the browser lets it share this address's storage: a board framed there would hold the key and could
+   * be clicked blind. So a framed board takes its key only inside the board's own pages or the editor's own browser.
+   */
+  function framedByStranger() {
+    if (window.top === window.self) return false;
+    const friendly = o => o === location.origin || /^vscode-(webview|file):/i.test(o);
+    const around = location.ancestorOrigins;
+    if (around && typeof around.length === 'number') { for (let i = 0; i < around.length; i += 1) if (!friendly(String(around[i]))) return true; return false; }
+    // A browser that does not name the pages around a frame: only a top page of the board's own address is known.
+    try { return window.top.location.origin !== location.origin; } catch (e) { return true; }
+  }
+  async function enter() {
+    const q = new URLSearchParams(location.search), given = q.get('k') || '', pass = q.get('p') || '';
+    if (q.has('k') || q.has('p')) { q.delete('k'); q.delete('p'); const rest = q.toString(); history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash); }
+    if (framedByStranger()) {
+      keyMissing = true;
+      $('nokeyTitle').textContent = 'This board is inside another page';
+      $('nokeyHow').textContent = `Open it in a tab of its own: ${location.origin}/`;
+      $('nokey').querySelectorAll('p.g').forEach((one, i) => { one.textContent = i === 0 ? 'A board shown inside another site takes no key, so nothing in it can be pressed without you seeing it.' : ''; });
+      $('nokey').hidden = false;
+      return;
+    }
+    const shaped = v => /^[A-Za-z0-9_-]{32,128}$/.test(v);
+    let offered = '';
+    if (shaped(given)) offered = given;
+    else if (shaped(pass)) {
+      try {
+        const data = await (await fetch('/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pass }) })).json();
+        if (data && data.ok === true && shaped(String(data.key || ''))) offered = data.key;
+      } catch (e) { /* the key this browser holds, if any, is tried next */ }
+    }
+    // A key from the address is kept only once the server took it: a link from anywhere can neither replace the key
+    // this browser holds nor make it forget one.
+    if (offered) {
+      let taken = false;
+      try { taken = (await fetch('/head', { cache: 'no-store', headers: { 'X-Siui-Key': offered } })).ok; } catch (e) { /* not reached */ }
+      if (taken) { boardKey = offered; cameWithKey = true; stored.set(offered); return; }
+    }
+    boardKey = stored.get();
+  }
+  /** The page has no key, or one this board does not know: the polling stops, the screen says what to do. */
+  function needKey() {
+    if (keyMissing) return;
+    keyMissing = true; boardKey = '';
+    document.querySelectorAll('dialog[open]').forEach(d => { try { d.close(); } catch (e) { /* not open */ } });
+    $('nokey').hidden = false;
+  }
+  /** A call to the board's server, with the key. */
+  async function api(route, options) {
+    const o = options || {};
+    const res = await fetch(route, Object.assign({ cache: 'no-store' }, o, { headers: Object.assign({ 'X-Siui-Key': boardKey }, o.headers || {}) }));
+    if (res.status === 401) needKey();
+    return res;
+  }
+  async function post(route, body, asks) {
     let data = {};
     try {
-      const res = await fetch(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const res = await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
       data = await res.json().catch(() => ({}));
     } catch (e) { data = { error: 'the board server was not reached' }; }
+    // An answer that asks something back is the caller's to show, when the caller said it can.
+    if (data.ok !== true && data.ask && asks) return data;
     if (data.ok !== true) { toast(data.error || 'failed'); return null; }
     return data;
   }
-  /** One save point flow for every button: a name, then a commit of the whole project on the given stage. */
+  /** One save point flow for every button: a name, then a snapshot of the project's folder, kept aside from the branch, on the given stage. */
   async function savePoint(world, level, btn) {
     const title = await ask('A name for this save point:', { ok: 'Save', value: `Checkpoint ${new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}` });
     if (title === null || !title.trim()) return;
     if (btn) btn.disabled = true;
-    const data = await post('/checkpoint', { title: title.trim(), world, level: level || '' });
+    const body = { title: title.trim(), world, level: level || '' };
+    let data = await post('/checkpoint', body, true);
+    if (data && data.ask === 'newFiles') {
+      // A save point is a commit on the person's branch: files git does not know yet are added only when they agree, once.
+      const files = Array.isArray(data.files) ? data.files.map(String) : [], count = Number(data.count) || files.length;
+      const choice = await ask(`A save point keeps this folder as it is now, aside from your branch.\n\n${count} new file${count === 1 ? '' : 's'} would be kept in it: ${files.join(', ')}${count > files.length ? ` and ${count - files.length} more` : ''}.\n\nFiles that look like secrets (.env, keys) are never taken.`, { ok: 'Add new files', alt: 'Tracked files only' });
+      data = choice === false ? null : await post('/checkpoint', { ...body, newFiles: choice === 'alt' ? 'tracked' : 'all' });
+    }
     if (btn) btn.disabled = false;
-    if (data) toast(`Save point at ${(data.commit || '').slice(0, 7)}`);
+    if (data) toast(`Save point at ${(data.commit || '').slice(0, 7)}${Array.isArray(data.leftOut) && data.leftOut.length ? ` · left out, as they look like secrets: ${data.leftOut.join(', ')}` : ''}`);
   }
 
   /** A text size in an SVG: never below 12 px, the small labels scaled with the page's base size (the factor is read once per drawing). */
@@ -815,7 +906,7 @@
     challenge: { name: 'Problem', game: 'challenge', done: 'cleared', doneVerb: 'Cleared', hint: 'a hard problem to clear', tone: '#c2410c' },
     check: { name: 'Check', game: 'checkbox', done: 'passed', doneVerb: 'Passed', hint: 'a check or a test you asked for', tone: '#0d9488' },
     pipe: { name: 'Jump', game: 'warp pipe', done: 'taken', doneVerb: 'Taken', hint: 'the work moved to another stage or world', tone: '#15803d' },
-    checkpoint: { name: 'Save point', game: 'checkpoint', done: 'returned to', doneVerb: 'Returned', hint: 'a commit of the whole project to return to', tone: 'var(--accent)' },
+    checkpoint: { name: 'Save point', game: 'checkpoint', done: 'returned to', doneVerb: 'Returned', hint: 'a snapshot of the project to return to; your branch and changes stay as they are', tone: 'var(--accent)' },
   };
   const kindWords = k => `${KINDS[k].name} · in the game: ${KINDS[k].game} · ${KINDS[k].hint}`;
 
@@ -871,10 +962,43 @@
   const statusGame = key => (U.statuses && typeof U.statuses[key] === 'string') ? U.statuses[key] : '';
   const ws = k => U.words[k + 's'] || (w(k) + 's');
   const Wc = k => { const t = w(k); return t.charAt(0).toUpperCase() + t.slice(1); };
-  /** Strings from a universe file are kept harmless: a drawing with a script, a handler, a link, a style or a reference is dropped; words are plain text. */
-  const UNSAFE_SVG = /<script|\bon[a-z]+\s*=|javascript:|<foreignObject|<iframe|href\s*=|xlink:|<style|url\(|@import|<use\b/i;
-  const safeSvg = s => (typeof s === 'string' && s.trim() && !UNSAFE_SVG.test(s)) ? s : '';
-  const plainText = s => typeof s === 'string' ? s.replace(/<[^>]*>/g, '').trim() : '';
+  /**
+   * A drawing from a universe file, rebuilt from what is known to be harmless: the file's string is parsed as SVG and
+   * written again from an allowlist of shapes and presentation attributes with plain values; anything else (a script,
+   * a handler, a link, a style, a reference, HTML, text) drops the whole drawing. The file's own string is never
+   * written into the page.
+   */
+  const SVG_SHAPES = new Set(['g', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon']);
+  const SVG_ATTRS = new Set(['d', 'fill', 'stroke', 'stroke-width', 'stroke-linejoin', 'stroke-linecap', 'stroke-dasharray', 'stroke-opacity',
+    'fill-opacity', 'fill-rule', 'clip-rule', 'opacity', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'width', 'height', 'points', 'transform']);
+  const SVG_VALUE = /^[\w\s.,#%()+-]*$/;
+  function safeSvg(text) {
+    if (typeof text !== 'string' || !text.trim() || text.length > 40000) return '';
+    let root;
+    try { root = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${text}</svg>`, 'image/svg+xml').documentElement; }
+    catch (e) { return ''; }
+    if (!root || root.localName !== 'svg' || root.getElementsByTagName('parsererror').length) return '';
+    const build = node => {
+      let out = '';
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === 3 && !child.nodeValue.trim()) continue;
+        if (child.nodeType === 8) continue;
+        if (child.nodeType !== 1 || child.namespaceURI !== 'http://www.w3.org/2000/svg' || !SVG_SHAPES.has(child.localName)) return null;
+        let attrs = '';
+        for (const a of Array.from(child.attributes)) {
+          if (!SVG_ATTRS.has(a.name) || !SVG_VALUE.test(a.value) || /url\s*\(/i.test(a.value)) return null;
+          attrs += ` ${a.name}="${a.value}"`;
+        }
+        const inner = build(child);
+        if (inner === null) return null;
+        out += `<${child.localName}${attrs}>${inner}</${child.localName}>`;
+      }
+      return out;
+    };
+    return build(root) || '';
+  }
+  // A word from a universe file is words: its tags go, and so does any bracket left over, so a tag left open cannot start one.
+  const plainText = s => typeof s === 'string' ? s.replace(/<[^>]*>/g, '').replace(/[<>]/g, '').trim() : '';
   /** A map of strings, each passed through `keep`; entries that come out empty are dropped. */
   function safeMap(obj, keep) {
     const out = {};
@@ -910,7 +1034,9 @@
     const dark = document.documentElement.dataset.scheme === 'dark';
     const vars = (U.palette && U.palette[dark ? 'dark' : 'light']) || {};
     // A colour or a simple value only: nothing with a block, a statement end or a reference in it.
-    const safeValue = v => typeof v === 'string' && v.length < 80 && !/[;{}<>]|url\(|expression/i.test(v);
+    // A palette value is a plain colour value: no quote, bracket or semicolon, so it is safe as a CSS value here and
+    // as an attribute value where an export writes it in place of its variable.
+    const safeValue = v => typeof v === 'string' && v.length < 80 && /^[\w .,#%()+\/-]*$/.test(v) && !/url\s*\(|expression/i.test(v);
     Object.keys(vars).forEach(k => { if (/^--[a-z0-9-]+$/.test(k) && safeValue(vars[k])) { root.setProperty(k, vars[k]); paletteKeys.push(k); } });
   }
   let universeWanted = '';
@@ -918,7 +1044,7 @@
   async function loadUniverse(name) {
     let set = universeCache[name];
     if (!set) {
-      try { set = await (await fetch(`/universe?name=${encodeURIComponent(name)}`, { cache: 'no-store' })).json(); } catch (e) { set = null; }
+      try { set = await (await api(`/universe?name=${encodeURIComponent(name)}`)).json(); } catch (e) { set = null; }
       if (!set || set.error) set = { name: 'classic' };
       universeCache[name] = set;
     }
@@ -927,16 +1053,17 @@
     renderUniverseMenu();
     if (state) render(true);
   }
-  /** An in-page confirm (no `value`) or prompt (a `value` to edit): the browser's own are blocked inside VS Code's Simple Browser. */
-  function ask(text, { ok = 'OK', value = null } = {}) {
+  /** An in-page confirm (no `value`) or prompt (a `value` to edit): the browser's own are blocked inside VS Code's Simple Browser. With `alt`, a confirm has a second choice and resolves 'alt' for it. */
+  function ask(text, { ok = 'OK', value = null, alt = '' } = {}) {
     return new Promise(resolve => {
-      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]');
+      const d = $('ask'), input = d.querySelector('.askinput'), okBtn = d.querySelector('[value=ok]'), altBtn = d.querySelector('[data-alt]');
       const isPrompt = value !== null;
       d.querySelector('.asktext').textContent = text;
       okBtn.textContent = ok;
+      altBtn.hidden = !alt || isPrompt; altBtn.textContent = alt;
       input.hidden = !isPrompt;
       if (isPrompt) input.value = value;
-      const onClose = () => { d.removeEventListener('close', onClose); resolve(d.returnValue === 'ok' ? (isPrompt ? input.value : true) : (isPrompt ? null : false)); };
+      const onClose = () => { d.removeEventListener('close', onClose); resolve(d.returnValue === 'ok' ? (isPrompt ? input.value : true) : d.returnValue === 'alt' && !isPrompt ? 'alt' : (isPrompt ? null : false)); };
       d.addEventListener('close', onClose);
       d.returnValue = '';
       d.showModal();
@@ -944,12 +1071,13 @@
     });
   }
   $('ask').querySelector('[data-cancel]').addEventListener('click', () => $('ask').close('cancel'));
+  $('ask').querySelector('[data-alt]').addEventListener('click', () => $('ask').close('alt'));
   /** Where to move a mark or a decision: a world and one of its stages; null when cancelled. */
   function askMove(curWorld, curLevel) {
     return new Promise(resolve => {
       const d = $('move'), f = d.querySelector('form'), ws = f.world, ls = f.level;
       const runs = ((state && state.record && state.record.runs) || []).slice().sort((a, b) => a.world - b.world);
-      ws.innerHTML = runs.map(r => `<option value="${r.world}"${r.world === curWorld ? ' selected' : ''}>${isSide(r) ? 'Side quests' : esc(`${Wc('world')} ${r.world} · ${packName(r)}`)}</option>`).join('');
+      ws.innerHTML = runs.map(r => `<option value="${esc(r.world)}"${r.world === curWorld ? ' selected' : ''}>${isSide(r) ? 'Side quests' : esc(`${Wc('world')} ${r.world} · ${packName(r)}`)}</option>`).join('');
       const fill = () => { const r = runs.find(x => String(x.world) === ws.value); ls.innerHTML = r ? overview(r).map(v => `<option value="${esc(v.level)}"${v.level === curLevel ? ' selected' : ''}>${esc(v.level)} ${esc(v.title)}</option>`).join('') : ''; };
       ws.onchange = fill; fill();
       const onClose = () => { d.removeEventListener('close', onClose); resolve(d.returnValue === 'ok' && ls.value ? { world: Number(ws.value), level: ls.value } : null); };
@@ -1015,10 +1143,26 @@
     if (!overview(run).filter(v => !v.isBoss && !v.road).every(v => v.state === 'done')) return '';
     return `<button class="small primary" data-apply="${esc(run.world)}" data-level="${esc(view.level)}" title="Ask the chat for the ${esc(w('boss'))} ${esc(w('card'))}: the review of every decision, then Apply">Review and apply</button>`;
   }
+  /**
+   * What a prompt to the chat may carry from the state. A prompt is sent in the person's own voice, so nothing a file
+   * wrote goes into it but ids of a fixed shape: a title, an answer or a path could hold a sentence planted for the
+   * assistant (a folder may be named with one).
+   */
+  const idOf = {
+    level: v => (/^\d+-\d+[ab]?$/.test(String(v || '')) ? String(v) : ''),
+    slug: v => (/^[a-z0-9-]{1,60}$/.test(String(v || '')) ? String(v) : ''),
+    road: v => (v === 'a' || v === 'b' ? v : ''),
+    world: v => (Number.isInteger(v) && v >= 0 ? String(v) : typeof v === 'string' && /^\d{1,4}$/.test(v) ? String(Number(v)) : ''),
+  };
+  /** Sends a prompt built from ids; refused when one of them is not an id. */
+  async function askChat(text, ...ids) {
+    if (ids.some(v => v === '')) { toast('Not sent: an id here is not a plain one (lowercase letters, digits and dashes)'); return false; }
+    return post('/prompt', { text });
+  }
   function wireApply(el) {
     el.querySelectorAll('[data-apply]').forEach(b => b.addEventListener('click', async () => {
-      const world = Number(b.dataset.apply), level = b.dataset.level;
-      if (await post('/prompt', { text: `Present the boss card of world ${world} (level ${level}) now: the review of every decision of the world, one line per level, with the options Apply, Change one and Stop, with no text before it. On Apply, apply the world as its pack says and call the done tool.` })) toast('Asked the chat for the review');
+      const world = idOf.world(b.dataset.apply), level = idOf.level(b.dataset.level);
+      if (await askChat(`Present the boss card of world ${world} (level ${level}) now: the review of every decision of the world, one line per level, with the options Apply, Change one and Stop, with no text before it. On Apply, apply the world as its pack says and call the done tool.`, world, level)) toast('Asked the chat for the review');
     }));
   }
 
@@ -1049,11 +1193,11 @@
     }));
     el.querySelectorAll('[data-return]').forEach(b => b.addEventListener('click', async () => {
       const f = b.closest('.fold, section').querySelector('form.addmark');
-      if (!(await ask(`Return the project to the checkpoint "${b.dataset.title}"?\n\nEverything there now is committed and kept under a git tag first, so nothing is lost; the files then go back to the save point.`, { ok: 'Return' }))) return;
+      if (!(await ask(`Return the project's files to the save point "${b.dataset.title}"?\n\nWhat is there now is kept first as a git stash entry, so nothing is lost. Files made since leave the folder. Your branch does not move.`, { ok: 'Return' }))) return;
       b.disabled = true;
       const data = await post('/revert', { id: b.dataset.return, world: Number(f.dataset.world), level: f.dataset.level });
       b.disabled = false;
-      if (data) toast(`Returned; the state before is kept as ${data.keptAs}`);
+      if (data) toast(data.keptAs ? `Returned; what was there is kept as ${data.keptAs}` : 'Returned; nothing had changed since, so there was nothing to keep');
     }));
     el.querySelectorAll('[data-move-event]').forEach(b => b.addEventListener('click', () => moveThing({ kind: 'event', id: b.dataset.moveEvent }, Number(b.dataset.world), b.dataset.level)));
     el.querySelectorAll('[data-done]').forEach(b => b.addEventListener('click', async () => { if (await post('/event', { id: b.dataset.done, status: 'done' })) toast('Marked done'); }));
@@ -1169,7 +1313,7 @@
       const openN = events.filter(ev => ev.status === 'open').length;
       const hasCard = !r.isPack && waitingWorld() === r.world;
       const bld = building(), isBuildingWorld = !r.isPack && !!bld && bld.world === r.world;
-      svg += `<g class="tile${isSel ? ' selected' : ''}${bornIds.has(r.id) ? ' born' : ''}${stKey === 'here' || isBuildingWorld ? ' working' : ''}${hasCard ? ' waiting' : ''}" data-run="${esc(r.id)}" tabindex="0"><title>${isSide(r) ? 'Side quests: decisions after a boss that belong to no stage, kept by month' : `${esc(Wc('world'))} ${r.world}: ${esc(title)}`} · ${esc(st)} · ${doneN} of ${levels.length} ${esc(ws('stage'))} done${openN ? ` · ${openN} open on the map` : ''}. Click to show it.</title>`;
+      svg += `<g class="tile${isSel ? ' selected' : ''}${bornIds.has(r.id) ? ' born' : ''}${stKey === 'here' || isBuildingWorld ? ' working' : ''}${hasCard ? ' waiting' : ''}" data-run="${esc(r.id)}" tabindex="0"><title>${isSide(r) ? 'Side quests: decisions after a boss that belong to no stage, kept by month' : `${esc(Wc('world'))} ${esc(r.world)}: ${esc(title)}`} · ${esc(st)} · ${doneN} of ${levels.length} ${esc(ws('stage'))} done${openN ? ` · ${openN} open on the map` : ''}. Click to show it.</title>`;
       const rx = U.shapes.tileRx, gid = `rm-${i}`;
       svg += `<defs><linearGradient id="${gid}-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="color-mix(in srgb, ${col} ${r.isPack ? 8 : 18}%, var(--panel))"/><stop offset="1" stop-color="color-mix(in srgb, ${col} ${r.isPack ? 3 : 6}%, var(--panel))"/></linearGradient><clipPath id="${gid}-clip"><rect x="${x}" y="${y}" width="${tw}" height="${th}" rx="${rx}"/></clipPath></defs>`;
       if (isSel) svg += `<rect x="${x - 4}" y="${y - 4}" width="${tw + 8}" height="${th + 8}" rx="${rx + 4}" fill="none" stroke="var(--accent)" stroke-opacity="0.35" stroke-width="6"/><path d="M${x + tw / 2 - 7},${y - 12} h14 l-7,8 z" fill="var(--accent)"><title>The ${esc(w('world'))} shown on the map below</title></path>`;
@@ -1179,7 +1323,7 @@
       svg += `<rect class="body" x="${x}" y="${y}" width="${tw}" height="${th}" rx="${rx}" fill="${isAbandoned ? `url(#${gid}-hatch)` : `url(#${gid}-fill)`}" stroke="${isAbandoned ? 'var(--dim)' : col}" stroke-width="1.5"${r.isPack || isAbandoned ? ' stroke-dasharray="6 4"' : ''}${isAbandoned ? ' opacity="0.85"' : ''}/>`;
       if (U.shapes.tileMotif) svg += `<g clip-path="url(#${gid}-clip)"><g transform="translate(${x + tw - 42},${y + th / 2 + 2}) scale(2.8)" fill="${col}" style="color:${col}" opacity="0.1">${U.shapes.tileMotif}</g></g>`;
       svg += `<rect x="${x}" y="${y}" width="5" height="${th}" fill="${col}" clip-path="url(#${gid}-clip)"${r.isPack ? ' opacity="0.5"' : ''}/>`;
-      svg += `<text x="${x + 17}" y="${y + 24}" font-size="${sz(16)}" font-weight="750" fill="${col}">${isSide(r) ? 'S' : esc(Wc('world').charAt(0)) + r.world}</text>`;
+      svg += `<text x="${x + 17}" y="${y + 24}" font-size="${sz(16)}" font-weight="750" fill="${col}">${isSide(r) ? 'S' : esc(Wc('world').charAt(0)) + esc(r.world)}</text>`;
       const isFinished = !r.isPack && runState(r).key === 'finished';
       const ofk = r.isPack ? null : openForkOf(r);
       svg += `<g transform="translate(${x + tw - (ofk ? 44 : 20)},${y + 19}) scale(0.9)"><title>${esc(WORLD_ICONS[worldIconOf(r)].name)}</title>${WORLD_ICONS[worldIconOf(r)].svg}</g>`;
@@ -1251,8 +1395,12 @@
     const name = `world-${n}-${slug}`;
     const picked = f.querySelector('input[name=method]:checked');
     const method = methods().find(m => m.name === (picked ? picked.value : ''));
+    // A method is named by its slug, like any pack: its file's name is the project's text, the title and the rest
+    // are the person's own words, typed just now.
+    const way = method ? idOf.slug(method.name) : '';
+    if (method && !way) { toast('Not sent: this method\'s name is not a plain one (lowercase letters, digits and dashes)'); return; }
     const text = method
-      ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${method.name}: read the pack at ${method.path} and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${method.name}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
+      ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${way}: read the pack and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${way}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
       : how === 'pack'
       ? `Create world ${n}: write the pack ${name} in this project's .claude/skills/decision-cards/packs/, titled "${title}", about: ${about || title}. Follow the README.md of that packs folder: a fixed-facts list, three levels of three to four cards with ids, titles and options (the recommended first), a boss level last, and the inputs and outputs per level. Then start it as world ${n}: load the skill decision-cards, read the pack and the first level's inputs, and present its fixed-facts card with pack "${name}" and world ${n} on every card. No text before the card.`
       : `Start an ad-hoc world ${n} titled "${title}" about: ${about || title}. Turn it into levels of three to four cards with a boss last, and present the first card with world ${n} on every card. No text before the card.`;
@@ -1391,16 +1539,19 @@
     wireApply(el);
     el.querySelectorAll('[data-fork]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Fork the stage ${b.dataset.fork} into roads a and b? A checkpoint is taken first; road a goes on disk.`, { ok: 'Fork' }))) return;
-      if (await post('/prompt', { text: `Fork the stage ${b.dataset.fork} now: call the fork tool with action "fork" and level "${b.dataset.fork}", then present the next card on road a, with no text before it.` })) toast('Asked the chat to fork');
+      const stage = idOf.level(b.dataset.fork);
+      if (await askChat(`Fork the stage ${stage} now: call the fork tool with action "fork" and level "${stage}", then present the next card on road a, with no text before it.`, stage)) toast('Asked the chat to fork');
     }));
     el.querySelectorAll('button[data-road]').forEach(b => b.addEventListener('click', async () => {
       if (b.disabled || !b.dataset.stage) return;
-      if (await post('/prompt', { text: `Put road ${b.dataset.road} of stage ${b.dataset.stage} on disk: call the fork tool with action "road", level "${b.dataset.stage}" and road "${b.dataset.road}", then go on with that road's cards, with no text before them.` })) toast(`Asked the chat to switch to road ${b.dataset.road}`);
+      const road = idOf.road(b.dataset.road), stage = idOf.level(b.dataset.stage);
+      if (await askChat(`Put road ${road} of stage ${stage} on disk: call the fork tool with action "road", level "${stage}" and road "${road}", then go on with that road's cards, with no text before them.`, road, stage)) toast(`Asked the chat to switch to road ${road}`);
     }));
     el.querySelectorAll('.otherroad').forEach(g => g.addEventListener('click', async e => {
       if (e.target.closest('.block')) return;
       const r = g.dataset.road; if (fk && fk.merged !== undefined) return;
-      if (await post('/prompt', { text: `Put road ${r} of stage ${baseLevel} on disk: call the fork tool with action "road", level "${baseLevel}" and road "${r}", then go on with that road's cards, with no text before them.` })) toast(`Asked the chat to switch to road ${r}`);
+      const road = idOf.road(r), stage = idOf.level(baseLevel);
+      if (await askChat(`Put road ${road} of stage ${stage} on disk: call the fork tool with action "road", level "${stage}" and road "${road}", then go on with that road's cards, with no text before them.`, road, stage)) toast(`Asked the chat to switch to road ${road}`);
     }));
     el.querySelectorAll('.block[data-jump]').forEach(b2 => b2.addEventListener('click', () => revealDecision(b2.dataset.jump)));
     el.querySelectorAll('[data-goto]').forEach(g => g.addEventListener('click', () => {
@@ -1613,8 +1764,8 @@
         if (await post('/pack-delete', { name: pack })) { toast('Pack deleted'); selectRun(''); }
       }));
       el.querySelector('[data-start]').addEventListener('click', async e => {
-        const pack = e.currentTarget.dataset.start;
-        if (await post('/prompt', { text: `Start the pack ${pack} as world ${run.world}: read the pack${run.path ? ` at ${run.path}` : ''}, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${run.world} on every card. No text before the card.` })) toast('Asked the chat to start it');
+        const pack = idOf.slug(e.currentTarget.dataset.start), world = idOf.world(run.world);
+        if (await askChat(`Start the pack ${pack} as world ${world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`, pack, world)) toast('Asked the chat to start it');
       });
       return;
     }
@@ -1631,13 +1782,13 @@
     wireOpen(el);
     const go = el.querySelector('[data-go]');
     if (go) go.addEventListener('click', async () => {
-      const hasPack = run.pack && run.pack !== 'ad-hoc';
+      const pack = run.pack === 'ad-hoc' ? '' : idOf.slug(run.pack), world = idOf.world(run.world);
       const text = answeredHere
-        ? `Go on with world ${run.world}${hasPack ? ` (pack ${run.pack})` : ''}: present its next card, with world ${run.world} on it and no text before it.`
-        : hasPack
-          ? `Start the pack ${run.pack} as world ${run.world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${run.pack}" and world ${run.world} on every card. No text before the card.`
-          : `Start world ${run.world}: present its first card, with world ${run.world} on every card and no text before it.`;
-      if (await post('/prompt', { text })) toast(answeredHere ? 'Asked the chat to go on' : 'Asked the chat to start it');
+        ? `Go on with world ${world}${pack ? ` (pack ${pack})` : ''}: present its next card, with world ${world} on it and no text before it.`
+        : pack
+          ? `Start the pack ${pack} as world ${world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`
+          : `Start world ${world}: present its first card, with world ${world} on every card and no text before it.`;
+      if (await askChat(text, world)) toast(answeredHere ? 'Asked the chat to go on' : 'Asked the chat to start it');
     });
     el.querySelectorAll('[data-abandon]').forEach(b => b.addEventListener('click', async () => {
       if (!(await ask(`Abandon ${w('world')} ${b.dataset.abandon}? It closes as abandoned; its answers stay in the record.`, { ok: 'Abandon' }))) return;
@@ -1831,10 +1982,15 @@
     return svg + '</svg>';
   }
 
+  /** Opens a file of the project in the editor; with no editor command on this machine, its folder shows it. The board never runs a file. */
+  async function openPath(path) {
+    const opened = await post('/open', { path });
+    if (opened) toast(opened.how === 'folder' ? 'Shown in its folder: no editor command (code) was found' : 'Opened in VS Code');
+  }
   function wireOpen(el) {
-    el.querySelectorAll('a[data-path], .gnode[data-path]').forEach(a => a.addEventListener('click', async e => {
+    el.querySelectorAll('a[data-path], .gnode[data-path]').forEach(a => a.addEventListener('click', e => {
       e.preventDefault();
-      if (await post('/open', { path: a.dataset.path })) toast('Opened in VS Code');
+      openPath(a.dataset.path);
     }));
   }
 
@@ -1987,8 +2143,9 @@
       const [level, id] = b.dataset.start.split('/');
       if (!(await post('/queue', { level, id, queued: false }))) return;
       if (b.hasAttribute('data-notify')) {
-        const text = `Start the queued decision ${level}/${id} (${b.dataset.title} → ${b.dataset.answer}) now: build what was decided; present a card only where a choice is needed, with no text before it.`;
-        toast((await post('/prompt', { text })) ? 'Started: asked the chat to begin' : 'Out of the queue; the chat was not reached');
+        const lv = idOf.level(level), key = idOf.slug(id);
+        const text = `Start the queued decision ${lv}/${key} now: its title and answer are in the record of decisions; build what was decided, and present a card only where a choice is needed, with no text before it.`;
+        toast((await askChat(text, lv, key)) ? 'Started: asked the chat to begin' : 'Out of the queue; the chat was not reached');
       } else toast('Marked started');
       render(true);
     }));
@@ -2000,7 +2157,8 @@
     }));
     el.querySelectorAll('button[data-again]').forEach(b => b.addEventListener('click', async () => {
       const [level, id] = b.dataset.again.split('/');
-      if (await post('/prompt', { text: `Present the card ${level}/${id} (${b.dataset.title}) again, with no text before it.` })) toast('Asked the chat to present it again');
+      const lv = idOf.level(level), key = idOf.slug(id);
+      if (await askChat(`Present the card ${lv}/${key} again, with no text before it; its title is in the record of decisions.`, lv, key)) toast('Asked the chat to present it again');
     }));
     el.querySelectorAll('button[data-save]').forEach(b => b.addEventListener('click', async () => {
       const box = b.closest('.notebox');
@@ -2059,21 +2217,24 @@
     return runs.map(run => ({ run, name: isSide(run) ? 'Side quests' : `${Wc('world')} ${run.world} · ${shortPack(run)}`, rows: exportRows(run), cost: costOf(run.decisions) }));
   }
   function exportMarkdown() {
-    const cell = t => String(t).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    // Text from the record is written as text: one line, with the characters that would start a tag or an entity
+    // made harmless and a link or a picture left as its own characters; a table cell also keeps its bars.
+    const mdx = t => String(t === null || t === undefined ? '' : t).replace(/[\r\n]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\]\(/g, ']\\(');
+    const cell = t => mdx(t).replace(/\|/g, '\\|');
     const worlds = exportWorlds();
     const total = worlds.reduce((sum, one) => sum + one.cost, 0);
     const spent = n => n > 0 ? ` · ${money(n)}` : '';
-    const lines = [`# ${state.project}: the roadmap`, '', `Exported ${new Date().toLocaleString()} from the Siui board · universe ${U.title}.`, ''];
+    const lines = [`# ${mdx(state.project)}: the roadmap`, '', `Exported ${new Date().toLocaleString()} from the Siui board · universe ${mdx(U.title)}.`, ''];
     if (total > 0) lines.push(`Cost counted: ${money(total)}, the session's spend at API prices on the decisions that carry one.`, '');
     worlds.forEach(({ run, name, rows, cost }) => {
-      lines.push(`## ${name} · ${runState(run).label}${spent(cost)}`, '');
+      lines.push(`## ${mdx(name)} · ${mdx(runState(run).label)}${spent(cost)}`, '');
       rows.forEach(r => {
-        lines.push(`### ${r.level} ${r.title}${r.isBoss ? ` (${w('boss')})` : ''} · ${r.status}${spent(r.cost)}`, '');
+        lines.push(`### ${mdx(r.level)} ${mdx(r.title)}${r.isBoss ? ` (${mdx(w('boss'))})` : ''} · ${mdx(r.status)}${spent(r.cost)}`, '');
         const priced = r.cards.some(c => c.cost > 0);
-        if (r.cards.length) { lines.push(`| ${Wc('card')} | Answer | When | By |${priced ? ' Cost |' : ''}`, `|---|---|---|---|${priced ? '---:|' : ''}`); r.cards.forEach(c => lines.push(`| ${cell(c.title)} | ${cell(c.answer)} | ${when(c.at)} | ${c.via}${c.queued ? ', queued' : ''} |${priced ? ` ${c.cost > 0 ? money(c.cost) : ''} |` : ''}`)); lines.push(''); }
-        if (r.chat.length) { lines.push('Decided in the chat:', ''); r.chat.forEach(c => lines.push(`- ${c.title}: ${c.answer}${c.why ? ` (${c.why})` : ''}`)); lines.push(''); }
-        if (r.skipped.length) lines.push('Skipped: ' + r.skipped.map(c => c.title).join(', '), '');
-        if (r.marks.length) { lines.push('On the map:', ''); r.marks.forEach(m => lines.push(`- ${m.kind}: ${m.title} (${m.status === 'done' ? m.done : 'open'})`)); lines.push(''); }
+        if (r.cards.length) { lines.push(`| ${cell(Wc('card'))} | Answer | When | By |${priced ? ' Cost |' : ''}`, `|---|---|---|---|${priced ? '---:|' : ''}`); r.cards.forEach(c => lines.push(`| ${cell(c.title)} | ${cell(c.answer)} | ${when(c.at)} | ${mdx(c.via)}${c.queued ? ', queued' : ''} |${priced ? ` ${c.cost > 0 ? money(c.cost) : ''} |` : ''}`)); lines.push(''); }
+        if (r.chat.length) { lines.push('Decided in the chat:', ''); r.chat.forEach(c => lines.push(`- ${mdx(c.title)}: ${mdx(c.answer)}${c.why ? ` (${mdx(c.why)})` : ''}`)); lines.push(''); }
+        if (r.skipped.length) lines.push('Skipped: ' + r.skipped.map(c => mdx(c.title)).join(', '), '');
+        if (r.marks.length) { lines.push('On the map:', ''); r.marks.forEach(m => lines.push(`- ${mdx(m.kind)}: ${mdx(m.title)} (${m.status === 'done' ? mdx(m.done) : 'open'})`)); lines.push(''); }
       });
     });
     return lines.join('\n');
@@ -2102,7 +2263,7 @@
     const text = kind === 'html' ? exportHtml() : kind === 'md' ? exportMarkdown() : exportSvgOf('roadmap');
     if (!text) { toast('Nothing to export yet'); return; }
     const data = await post('/export', { kind, text });
-    if (data && data.ok) toast(`Exported to ${data.path}`, { label: 'Open', onClick: () => post('/open', { path: data.path }) });
+    if (data && data.ok) toast(`Exported to ${data.path}`, { label: 'Open', onClick: () => openPath(data.path) });
   }
   document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', () => { $('exportMenu').removeAttribute('open'); doExport(b.dataset.export); }));
 
@@ -2420,7 +2581,7 @@
     const markKind = { bug: 'enemy', feature: 'powerup', problem: 'challenge', check: 'check' }[card.mark];
     const cardRun = ((state && state.record && state.record.runs) || []).find(r => r.world === card.world) || null;
     const worldName = card.world === 0 ? 'Side quests' : `${Wc('world')} ${card.world} · ${shortPack(cardRun || card)}`;
-    const where = `<a class="place" href="#" data-showcard title="Show this ${esc(w('world'))} and ${esc(w('stage'))} on the maps">${cardRun ? worldIconHtml(cardRun, 14) : ''} ${esc(worldName)} › ${esc(card.level === '0-1' && card.world === 0 ? 'this month' : card.level)}${card.levelTitle ? ' ' + esc(card.levelTitle) : ''}</a>` + (card.index && card.count ? ` · ${esc(w('card'))} ${card.index} of ${card.count}` : '') + (card.kind === 'info' ? ' · info' : card.kind === 'boss' ? ` · ${esc(w('boss'))}` : '') + (markKind ? ` · <span class="tag" title="${esc(kindWords(markKind))}">${iconHtml(markKind, 13)} ${esc(KINDS[markKind].name)}</span>` : '');
+    const where = `<a class="place" href="#" data-showcard title="Show this ${esc(w('world'))} and ${esc(w('stage'))} on the maps">${cardRun ? worldIconHtml(cardRun, 14) : ''} ${esc(worldName)} › ${esc(card.level === '0-1' && card.world === 0 ? 'this month' : card.level)}${card.levelTitle ? ' ' + esc(card.levelTitle) : ''}</a>` + (card.index && card.count ? ` · ${esc(w('card'))} ${esc(card.index)} of ${esc(card.count)}` : '') + (card.kind === 'info' ? ' · info' : card.kind === 'boss' ? ` · ${esc(w('boss'))}` : '') + (markKind ? ` · <span class="tag" title="${esc(kindWords(markKind))}">${iconHtml(markKind, 13)} ${esc(KINDS[markKind].name)}</span>` : '');
     const full = card.full || {};
     const tip = key => full[key] ? ` title="${esc(full[key])}"` : '';
     // The options, each with a label (empty when missing) and the words on its effect.
@@ -2489,7 +2650,7 @@
       ...eventsOf(run.world).map(ev => ({ t: Date.parse(ev.doneAt || ev.at), text: `${KINDS[ev.kind].name}: ${ev.title}${ev.status === 'done' ? ' · ' + KINDS[ev.kind].done : ''}`, level: ev.level, kind: ev.kind }))]
       .sort((a, b) => b.t - a.t).slice(0, 5);
     let html = `<h2>Where you are</h2><div class="kv"><span class="k">Chat</span><span>${esc(chat)}</span>${state.sessionAlive && st && st.model ? `<span class="k">Model</span><span>${esc(st.model)}</span>` : ''}${state.sessionAlive && st && usageWords(st.usage) ? `<span class="k">Usage</span><span>${esc(usageWords(st.usage))}</span>` : ''}<span class="k">${esc(Wc('world'))}</span><span>${worldIconHtml(run, 14)} ${isSide(run) ? 'Side quests · by month' : `${esc(run.world)} · ${esc(run.isPack ? run.title : packName(run))} · ${esc(worldWord(run))}`}</span>` +
-      (here ? `<span class="k">${esc(Wc('stage'))}</span><span>${esc(here.level)} ${esc(here.title)} · ${esc(STATUS[stageStatus(here, run)].word)}${here.count ? ` · ${here.decisions.length} of ${here.count}` : ''}</span>` : '') + '</div>';
+      (here ? `<span class="k">${esc(Wc('stage'))}</span><span>${esc(here.level)} ${esc(here.title)} · ${esc(STATUS[stageStatus(here, run)].word)}${here.count ? ` · ${here.decisions.length} of ${esc(here.count)}` : ''}</span>` : '') + '</div>';
     if (openEv.length) {
       html += `<h2 style="margin-top:14px">Open on this ${esc(w('world'))} <span class="sub">${openEv.length}</span></h2><ul class="list">` + openEv.slice(0, 6).map(ev => `<li data-go="${esc(ev.level)}" tabindex="0" title="${esc(eventWords(ev))}">${iconHtml(glyphKindOf(ev), 16)} <span>${mdInline(fit(mdPlain(ev.title), 40))}</span><span class="w">${esc(ev.level)}</span></li>`).join('') + (openEv.length > 6 ? `<li class="empty" style="border:0">+${openEv.length - 6} more</li>` : '') + '</ul>';
     }
@@ -2562,8 +2723,137 @@
   }
 
   /** The whole state, drawn: the last one drawn is remembered only once the page drew it; a page error shows in the bar and the next change tries again. */
+  /**
+   * The state with its shapes made sure, in place: a number where the page counts, a string where it writes, a list
+   * where it loops, a date where it sorts. The record, the card, the status and the logs are files other programs
+   * write. Text stays text and is escaped where it is drawn; what this guards is the rest: a "number" that is markup,
+   * a list that is not one, a date that does not parse, a kind the page has no drawing for.
+   */
+  function tidyStatus(st) {
+    if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
+    const text = v => (typeof v === 'string' ? v : ''), whole = v => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+    st.state = text(st.state); st.detail = text(st.detail); st.at = typeof st.at === 'number' && Number.isFinite(st.at) ? st.at : 0;
+    if (st.model !== undefined) st.model = text(st.model);
+    if (st.mode !== 'on' && st.mode !== 'off') delete st.mode;
+    if (st.usage !== undefined) {
+      const u = st.usage && typeof st.usage === 'object' ? st.usage : {};
+      const usage = { limits: (Array.isArray(u.limits) ? u.limits : []).filter(l => l && typeof l === 'object').map(l => Object.assign({ kind: text(l.kind), percent: whole(l.percent) }, typeof l.resetsAt === 'string' ? { resetsAt: l.resetsAt } : {})) };
+      if (typeof u.usd === 'number' && Number.isFinite(u.usd)) usage.usd = u.usd;
+      if (typeof u.context === 'number' && Number.isFinite(u.context)) usage.context = u.context;
+      st.usage = usage;
+    }
+    return st;
+  }
+  function tidyState(d) {
+    const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    const obj = v => (isObj(v) ? v : {});
+    const list = v => (Array.isArray(v) ? v.filter(isObj) : []);
+    const str = v => (typeof v === 'string' ? v : v === null || v === undefined || typeof v === 'object' ? '' : String(v));
+    const int = (v, dflt) => { const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN; return Number.isFinite(n) ? Math.trunc(n) : dflt; };
+    // A date stays as it was written when it is a plain ISO date or stamp; anything else becomes one that is.
+    const STAMP = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+    const iso = v => { const text = str(v), t = STAMP.test(text) ? Date.parse(text) : NaN; return Number.isFinite(t) ? text : '1970-01-01T00:00:00.000Z'; };
+    const day = v => (typeof v === 'string' && STAMP.test(v) && Number.isFinite(Date.parse(v)) ? v : '');
+    const opt = (o, k, f) => { if (o[k] !== undefined) o[k] = f(o[k]); };
+    const flags = (o, keys) => keys.forEach(k => { if (o[k] !== true) delete o[k]; });
+    const srcs = v => list(v).filter(x => typeof x.path === 'string' && x.path).map(x => {
+      x.role = x.role === 'out' || x.role === 'both' ? x.role : 'in'; x.use = x.use === 'used' ? 'used' : 'maybe';
+      opt(x, 'name', str); opt(x, 'why', str); opt(x, 'href', str); flags(x, ['isRead', 'isMissing']);
+      if (x.bytes !== undefined) { const n = int(x.bytes, -1); if (n >= 0) x.bytes = n; else delete x.bytes; }
+      return x;
+    });
+    const dec = x => {
+      x.level = str(x.level); x.id = str(x.id); x.title = str(x.title); x.answer = str(x.answer); x.at = iso(x.at);
+      x.isOther = x.isOther === true; x.sources = srcs(x.sources);
+      if (!['card', 'chat', 'auto', 'skipped'].includes(x.via)) delete x.via;
+      opt(x, 'why', str); opt(x, 'note', str);
+      if (x.notes !== undefined) x.notes = list(x.notes).map(n => ({ at: iso(n.at), text: str(n.text) }));
+      if (x.cost !== undefined) { const c = typeof x.cost === 'number' ? x.cost : NaN; if (Number.isFinite(c) && c >= 0) x.cost = c; else delete x.cost; }
+      flags(x, ['queued', 'started', 'built']);
+      return x;
+    };
+    const plan = v => list(v).map(l => {
+      l.level = str(l.level); l.title = str(l.title);
+      const n = int(l.count, 0); if (n > 0) l.count = Math.min(n, 99); else delete l.count;
+      if (l.cards !== undefined) l.cards = list(l.cards).map(c => ({ id: str(c.id), title: str(c.title) }));
+      return l;
+    });
+    const run = r => {
+      // What marks a pack still to start is the page's own to set (pendingPacks): a run of the record cannot pose as one.
+      delete r.isPack; delete r.path; delete r.source;
+      r.world = Math.max(0, int(r.world, 0)); r.id = str(r.id).replace(/^pack:/, 'run:'); r.pack = str(r.pack); r.target = str(r.target); r.startedAt = day(r.startedAt);
+      r.finishedAt = r.finishedAt === null || r.finishedAt === undefined ? null : day(r.finishedAt) || '1970-01-01';
+      if (r.abandonedAt !== undefined) { const at = day(r.abandonedAt); if (at) r.abandonedAt = at; else delete r.abandonedAt; }
+      if (typeof r.title !== 'string') delete r.title;
+      if (r.facts !== true) delete r.facts;
+      const levels = {}, titles = {}, counts = {};
+      Object.keys(obj(r.levels)).forEach(k => { if (r.levels[k] === 'open' || r.levels[k] === 'done') levels[k] = r.levels[k]; });
+      Object.keys(obj(r.levelTitles)).forEach(k => { titles[k] = str(r.levelTitles[k]); });
+      Object.keys(obj(r.levelCounts)).forEach(k => { const n = int(r.levelCounts[k], 0); if (n > 0) counts[k] = Math.min(n, 99); });
+      r.levels = levels; r.levelTitles = titles; r.levelCounts = counts;
+      if (r.plan !== undefined) r.plan = plan(r.plan);
+      r.decisions = list(r.decisions).map(dec);
+      if (r.roads !== undefined) {
+        const roads = {};
+        Object.keys(obj(r.roads)).forEach(k => {
+          const f = r.roads[k];
+          if (!isObj(f)) return;
+          f.level = str(f.level) || k; f.at = iso(f.at); f.base = str(f.base); f.checkpoint = str(f.checkpoint);
+          f.branches = { a: str(obj(f.branches).a), b: str(obj(f.branches).b) }; f.onDisk = f.onDisk === 'b' ? 'b' : 'a';
+          if (!['a', 'b', 'both'].includes(f.merged)) delete f.merged;
+          opt(f, 'tag', str);
+          roads[k] = f;
+        });
+        r.roads = roads;
+      }
+      return r;
+    };
+    const mark = e => {
+      e.id = str(e.id); e.kind = str(e.kind); e.title = str(e.title); e.world = Math.max(0, int(e.world, 0)); e.level = str(e.level); e.at = iso(e.at);
+      e.status = e.status === 'done' ? 'done' : 'open';
+      opt(e, 'text', str); opt(e, 'doneAt', iso); opt(e, 'commit', str); opt(e, 'branch', str);
+      if (e.size !== undefined) e.size = Math.min(5, Math.max(1, int(e.size, 2)));
+      if (e.to !== undefined) { const to = obj(e.to), n = int(to.world, 0); if (n >= 1) e.to = Object.assign({ world: n }, typeof to.level === 'string' ? { level: to.level } : {}); else delete e.to; }
+      return e;
+    };
+    const card = c => {
+      if (!isObj(c) || typeof c.id !== 'string' || !c.id) return null;
+      c.world = Math.max(0, int(c.world, 0)); c.level = str(c.level); c.title = str(c.title); c.short = str(c.short);
+      c.kind = c.kind === 'info' || c.kind === 'boss' ? c.kind : 'decision';
+      ['index', 'count'].forEach(k => { const n = int(c[k], 0); if (n > 0) c[k] = Math.min(n, 99); else delete c[k]; });
+      c.options = list(c.options).map(o => Object.assign({ label: str(o.label) }, o.effect !== undefined ? { effect: str(o.effect) } : {}, typeof o.picture === 'string' ? { picture: o.picture } : {})).filter(o => o.label);
+      c.sources = srcs(c.sources); if (c.extraSources !== undefined) c.extraSources = srcs(c.extraSources);
+      ['levelTitle', 'explain', 'recommended', 'remaining', 'note', 'pack', 'question', 'worldTitle'].forEach(k => opt(c, k, str));
+      if (!['bug', 'feature', 'problem', 'check'].includes(c.mark)) delete c.mark;
+      if (c.autoUntil !== undefined) { if (typeof c.autoUntil !== 'number' || !Number.isFinite(c.autoUntil)) delete c.autoUntil; }
+      if (c.full !== undefined) { const full = {}; Object.keys(obj(c.full)).forEach(k => { full[k] = str(c.full[k]); }); c.full = full; }
+      return c;
+    };
+    d = obj(d);
+    d.root = str(d.root); d.project = str(d.project) || 'project';
+    d.record = obj(d.record);
+    d.record.runs = list(d.record.runs).map(run);
+    // A mark of a kind the page has no drawing for is left out: the kinds are its own six, by their own keys.
+    d.record.events = list(d.record.events).map(mark).filter(e => e.id && Object.keys(KINDS).includes(e.kind));
+    d.card = card(d.card);
+    d.status = tidyStatus(d.status);
+    ['auto', 'chatFirst', 'sessionAlive', 'git'].forEach(k => { d[k] = d[k] === true; });
+    const files = {}, num = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+    Object.keys(obj(d.files)).forEach(k => { const f = obj(d.files[k]); files[k] = f.exists === true ? { exists: true, size: num(f.size), mtime: num(f.mtime), isDir: f.isDir === true } : { exists: false }; });
+    d.files = files;
+    d.chat = list(d.chat).map(t => ({ at: iso(t.at), world: t.world === null || t.world === undefined ? null : int(t.world, null), level: str(t.level), user: str(t.user), assistant: str(t.assistant) }));
+    d.packs = list(d.packs).map(k => { k.name = str(k.name); k.title = str(k.title) || k.name; k.world = k.world === null || k.world === undefined ? null : int(k.world, null); k.levels = plan(k.levels); k.path = str(k.path); k.source = str(k.source); k.hidden = k.hidden === true; k.kind = k.kind === 'method' ? 'method' : 'plan'; k.facts = k.facts === true; k.about = str(k.about); return k; }).filter(k => k.name);
+    d.universes = list(d.universes).map(u => ({ name: str(u.name), title: str(u.title) || str(u.name), about: str(u.about), source: str(u.source) }));
+    d.config = obj(d.config);
+    d.config.theme = obj(d.config.theme);
+    return d;
+  }
+
   async function fetchState() {
-    const data = await (await fetch('/state', { cache: 'no-store' })).json();
+    const res = await api('/state');
+    if (keyMissing) return;
+    if (!res.ok) throw new Error(`the board's server answered ${res.status}`);
+    const data = tidyState(await res.json());
     renderAgent(data);
     renderAutoBtn(data.auto);
     renderChatFirstBtn(data.chatFirst);
@@ -2578,24 +2868,27 @@
     const uname = ((data.config && data.config.theme) || {}).universe || 'classic';
     if (uname !== universeWanted) { universeWanted = uname; await loadUniverse(uname).catch(e => console.error(e)); }
     renderUniverseMenu();
-    // /#export=<kind> runs an export once the page and its universe are drawn.
+    // /?k=<key>#export=<kind> runs an export once the page and its universe are drawn, for a script: only when the
+    // same address brought the key, so a link on another site cannot make this browser write a file.
     const m = /^#export=(html|md|svg)$/.exec(location.hash);
-    if (m && !pageError) { history.replaceState(null, '', location.pathname); setTimeout(() => doExport(m[1]), 400); }
+    if (m) { history.replaceState(null, '', location.pathname); if (cameWithKey && !pageError) setTimeout(() => doExport(m[1]), 400); }
   }
   /** The polling: /head every 300 ms (2 s while the tab is hidden) for its small {"v": "…"}; /state only when v changed or on the first poll; one request at a time, the next scheduled after each answer. */
   let headV = null, pollTimer = 0, polling = false;
   async function poll() {
-    if (polling) return;
+    if (polling || keyMissing) return;
     polling = true; clearTimeout(pollTimer);
     try {
-      const res = await fetch('/head', { cache: 'no-store' });
+      if (!boardKey) { needKey(); polling = false; return; }
+      const res = await api('/head');
+      if (keyMissing) { polling = false; return; }
       // A server without /head is polled the old way: the state every time.
       const head = res.ok ? ((await res.json()) || {}) : null;
       const v = head ? String(head.v ?? '') : null;
       if (v === null || v !== headV || !state) { await fetchState(); headV = v; }
       else if ('status' in head) {
         // The chat's status rides in the head, so a change of it redraws the chip and the Now panel with no /state round trip.
-        const status = head.status || null, alive = !!head.alive;
+        const status = tidyStatus(head.status), alive = !!head.alive;
         if (JSON.stringify(status) !== JSON.stringify(state.status || null) || alive !== !!state.sessionAlive) {
           state.status = status; state.sessionAlive = alive;
           renderAgent(state); trackReady(state); renderModeBtns(state);
@@ -2609,7 +2902,7 @@
     }
     renderLive();
     polling = false;
-    pollTimer = setTimeout(poll, document.hidden ? 2000 : 300);
+    if (!keyMissing) pollTimer = setTimeout(poll, document.hidden ? 2000 : 300);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 
@@ -2755,7 +3048,7 @@
   initNow();
   let resizeTimer = 0;
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state) render(true); }, 120); });
-  poll();
+  enter().then(poll);
 })();
 </script>
 </body>

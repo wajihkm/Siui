@@ -5,17 +5,35 @@ done here the right way on every platform, Windows included.
     launch.py folder <run>                    makes the run folder, the user's alone; exit 1 when it is not theirs
     launch.py start --root R --run F --record P --chat C --port N [--ipc S]
                                               clears a stop file and starts server.py detached, its output in server.log
-    launch.py probe <port>                    prints the project root the server on that port serves; exit 1 when none
+    launch.py probe <port> <run>              whether the server on that port is this run folder's board: exit 0 when
+                                              it proves it holds the folder's key, 3 when something else answers
+                                              there, 1 when nothing does
+    launch.py pass <run>                      writes a one-time pass into the run folder and prints it: the page
+                                              opened with it in its address trades it for the board's key
+    launch.py open <run> <port>               opens the board in the person's browser with a fresh pass; exit 1
+                                              when no browser could be opened (the pass is then removed)
+    launch.py save <root> <run> <chat> <mode> <how> <title>
+                                              takes a save point of the project and prints one line of JSON: the
+                                              commit, the branch and the files left out, or an error. <how> is
+                                              "aside" (a snapshot under a ref of Siui's own; the branch, the index
+                                              and the list of changes stay as they are) or "commit" (a commit of
+                                              the folder on the branch, as the end of a world makes); <mode> is
+                                              "all" or "tracked", what the person chose for new files
     launch.py move <from> <to>                renames one file over another in one step
     launch.py remove <path>...                removes files; a missing one is fine
 
 Standard library only.
 """
 
+import hashlib
+import hmac
 import json
 import os
+import secrets
+import socket
 import subprocess
 import sys
+import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,12 +79,157 @@ def start(argv):
     return 1
 
 
-def probe(port):
+def probe(port, run):
+    """Asks the server on the port to prove it holds this run folder's key: a fresh nonce goes out, and the answer
+    is checked here against the key file. The key itself is never sent, so a program that took the port learns
+    nothing; and the port is part of the answer, so it cannot pass the question on to the real board."""
     try:
-        state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/state", timeout=2))
-    except Exception:  # noqa: BLE001 - nothing answers, or it is not the board
+        port = int(port)
+        with open(os.path.join(run, "key"), encoding="ascii") as handle:
+            key = handle.read().strip()
+    except (OSError, ValueError):
+        key = ""
+    nonce = secrets.token_urlsafe(24)
+    try:
+        # No proxy: the call is to this machine.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        answer = json.load(opener.open(f"http://127.0.0.1:{port}/id?n={nonce}", timeout=2))
+    except Exception:  # noqa: BLE001 - nothing answers, or not in JSON
+        # A listener that is not a board (or an older board) still holds the port.
+        return 3 if port_taken(port) else 1
+    wanted = hmac.new(key.encode("ascii", "replace"), f"{nonce}:{port}".encode("ascii"), hashlib.sha256).hexdigest()
+    proof = answer.get("proof") if isinstance(answer, dict) else None
+    return 0 if key and isinstance(proof, str) and hmac.compare_digest(proof, wanted) else 3
+
+
+def port_taken(port):
+    """Whether anything listens on the port."""
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_socket.settimeout(0.5)
+    try:
+        return probe_socket.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+    finally:
+        probe_socket.close()
+
+
+def make_pass(run):
+    """A one-time pass for the page: written into the run folder, the user's alone, and printed for the address."""
+    if folder(run) != 0:
         return 1
-    print(str(state.get("root") or ""))
+    made = secrets.token_urlsafe(32)
+    path = os.path.join(run, "pass")
+    try:
+        handle = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="ascii") as out:
+            json.dump({"pass": made, "at": time.time()}, out)
+        os.replace(path + ".new", path)
+    except OSError:
+        return 1
+    print(made)
+    return 0
+
+
+def is_wsl():
+    try:
+        with open("/proc/version", encoding="utf-8") as handle:
+            return "microsoft" in handle.read().lower()
+    except OSError:
+        return False
+
+
+def open_board(run, port):
+    """Opens the board with a one-time pass. An address given to a program is seen, for a moment, by whoever can
+    list this machine's processes, so the pass travels the way each system keeps it private:
+
+    - Windows, and Windows' browser from WSL: in the address; a command line there is its own user's to see.
+    - macOS: in a small page of the run folder (the user's alone) that sends the browser on; only the page's path
+      is on a command line.
+    - Linux: in the address, since a browser packed as a snap cannot read the run folder; the server refuses a pass
+      or a key from another user there, whom the kernel names.
+
+    When nothing could be opened the pass is removed, so none is left waiting for whoever finds it."""
+    try:
+        port = int(port)
+    except ValueError:
+        return 1
+    if folder(run) != 0:
+        return 1
+    made = secrets.token_urlsafe(32)
+    waiting = os.path.join(run, "pass")
+    try:
+        handle = os.open(waiting + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="ascii") as out:
+            json.dump({"pass": made, "at": time.time()}, out)
+        os.replace(waiting + ".new", waiting)
+    except OSError:
+        return 1
+    url = f"http://127.0.0.1:{port}/?p={made}"
+
+    def ran(command):
+        """Whether the opener started the browser. Its output is not read (a browser it starts would hold the pipe
+        open for as long as it lives), and one still running after a few seconds is the browser itself in front."""
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     **({} if IS_WINDOWS else {"start_new_session": True}))
+        except OSError:
+            return False
+        try:
+            return child.wait(timeout=6) == 0
+        except subprocess.TimeoutExpired:
+            return True
+
+    opened = False
+    if IS_WINDOWS:
+        try:
+            os.startfile(url)  # noqa: S606 - an address of this machine, handed to the user's own browser
+            opened = True
+        except OSError:
+            opened = False
+    elif is_wsl():
+        opened = ran(["wslview", url]) or ran(["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"]) or ran(["xdg-open", url])
+    elif sys.platform == "darwin":
+        page = os.path.join(run, "open.html")
+        try:
+            handle = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                out.write(f'<!doctype html><meta charset="utf-8"><title>Siui</title><meta http-equiv="refresh" content="0;url={url}">'
+                          f'<p><a href="{url}">Open the board</a></p>\n')
+            opened = ran(["open", page])
+        except OSError:
+            opened = False
+    else:
+        opened = ran(["xdg-open", url])
+    if not opened:
+        remove([waiting, os.path.join(run, "open.html")])
+        return 1
+    return 0
+
+
+def save(root, run, chat, mode, how, title):
+    """Takes a save point with the server's own code, so the plugin and the board keep one way of doing it."""
+    if mode not in ("all", "tracked") or how not in ("aside", "commit") or folder(run) != 0:
+        print(json.dumps({"error": "the save point could not be started"}))
+        return 0
+    import argparse
+    sys.path.insert(0, HERE)  # the plugin's own folder: this program runs isolated, without it on the path
+    import server
+    board = server.Board(argparse.Namespace(root=root, run=run, record=".claude/decisions.json", chat=chat, port=0, ipc=""), serving=False)
+    title = " ".join(str(title).split())[:60] or "Checkpoint"
+    if not board.has_git():
+        made = {"error": "not a git repository"}
+    elif how == "aside":
+        error, sha, left_out = board.snapshot(f"Save point: {title}", mode)
+        made = {"error": error} if error else {"commit": sha, "leftOut": left_out[:6]}
+    else:
+        error, left_out = board.commit_folder(f"Checkpoint: {title}", mode)
+        sha = "" if error else board.branch_commit()
+        made = {"error": error or "nothing is committed in this repository yet, so there is no commit to save as"} if error or not sha else {"commit": sha, "leftOut": left_out[:6]}
+    if "commit" in made:
+        _, branch, _ = board.git("rev-parse", "--abbrev-ref", "HEAD")
+        made["branch"] = branch or "HEAD"
+    print(json.dumps(made))
     return 0
 
 
@@ -94,8 +257,14 @@ def main():
         return folder(args[1])
     if verb == "start":
         return start(args[1:])
-    if verb == "probe" and len(args) == 2:
-        return probe(args[1])
+    if verb == "probe" and len(args) == 3:
+        return probe(args[1], args[2])
+    if verb == "pass" and len(args) == 2:
+        return make_pass(args[1])
+    if verb == "open" and len(args) == 3:
+        return open_board(args[1], args[2])
+    if verb == "save" and len(args) == 7:
+        return save(*args[1:])
     if verb == "move" and len(args) == 3:
         return move(args[1], args[2])
     if verb == "remove":

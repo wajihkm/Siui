@@ -50,9 +50,9 @@ export function mapSvg(run: GameRun): { source: string; alt: string } {
   const height = listTop + Math.max(maxLines, 1) * 15 + 18
 
   // Header.
-  const state = run.finishedAt ? `finished ${run.finishedAt}` : 'in progress'
+  const state = run.finishedAt ? `finished ${esc(String(run.finishedAt))}` : 'in progress'
   parts.push(
-    `<text x="10" y="18" font-size="${FONT + 2}" font-weight="bold" fill="${TEXT}">${run.pack === 'side' ? 'Side quests' : `${esc(cap(words().world))} ${run.world}`}</text>`,
+    `<text x="10" y="18" font-size="${FONT + 2}" font-weight="bold" fill="${TEXT}">${run.pack === 'side' ? 'Side quests' : `${esc(cap(words().world))} ${esc(String(run.world))}`}</text>`,
     `<text x="${10 + 70}" y="18" font-size="${FONT}" fill="${DASH}">${esc(run.pack)} · ${state} · ${run.decisions.length} decisions</text>`,
   )
   if (n === 0) {

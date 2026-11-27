@@ -5,9 +5,14 @@
 
 import type { EngineInterface } from 'claude-code'
 
-/** Whether a path is absolute: `/…`, `C:\…`, `C:/…` or a `\\server\share`. */
+/** Whether a path is absolute or rooted: `/…`, `\…`, `C:\…`, `C:/…`, `C:x` or a `\\server\share`. */
+/** Whether a path names another machine or a device (`\\host\share`, `//host/share`): never followed from a project's files. */
+export function isNetwork(path: string): boolean {
+  return path.trim().replace(/\//g, '\\').startsWith('\\\\')
+}
+
 export function isAbsolute(path: string): boolean {
-  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
+  return path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:/.test(path)
 }
 
 /** A path without its trailing separators. */
@@ -57,26 +62,21 @@ export async function homeOf($: EngineInterface): Promise<string | undefined> {
   return home === '' ? undefined : trimEnd(home)
 }
 
-let pythonOverride: string[] | undefined
 let pythonFound: string[] | undefined
 
-/** The configuration's `python`, when it names one: a command, with its arguments after spaces (`py -3`). */
-export function setPython(command: string | undefined): void {
-  const parts = (command ?? '').trim().split(/\s+/).filter(Boolean)
-  const next = parts.length > 0 ? parts : undefined
-  if (JSON.stringify(next) !== JSON.stringify(pythonOverride)) pythonFound = undefined
-  pythonOverride = next
-}
-
 /**
- * The command that runs Python 3 here, found once per session: the
- * configuration's, then `python3`, `python`, `py -3`, the first that prints a
- * 3. On Windows `python3` is often a shortcut to the Store that prints
- * nothing, which is why the answer is read and not just the exit code.
+ * The command that runs Python 3 here, found once per session: the one the
+ * person names in their own environment as `SIUI_PYTHON` (a command, its
+ * arguments after spaces: `py -3`), then `python3`, `python`, `py -3`, the
+ * first that prints a 3. On Windows `python3` is often a shortcut to the Store
+ * that prints nothing, which is why the answer is read and not just the exit
+ * code. The project's files never name it: a program a repository could name
+ * would run on the machine of whoever opened that repository.
  */
 export async function python($: EngineInterface): Promise<string[]> {
   if (pythonFound) return pythonFound
-  const tries: string[][] = [...(pythonOverride ? [pythonOverride] : []), ['python3'], ['python'], ['py', '-3']]
+  const named = ((await $.env.get('SIUI_PYTHON')) ?? '').trim().split(/\s+/).filter(Boolean)
+  const tries: string[][] = [...(named.length > 0 ? [named] : []), ['python3'], ['python'], ['py', '-3']]
   for (const command of tries) {
     try {
       const ran = await $.process.run([...command, '-c', 'import sys; print(sys.version_info[0])'], { timeoutMs: 10_000 })
