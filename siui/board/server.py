@@ -334,7 +334,9 @@ def live_sockets(preferred):
 
 
 class Board:
-    def __init__(self, args):
+    def __init__(self, args, serving=True):
+        """`serving` False is the launcher's use: the project's git side only, with no key made (a key belongs to
+        the server that is running, and making one here would leave its page without)."""
         self.root = os.path.abspath(args.root)
         self.run = os.path.abspath(args.run)
         self.record = args.record
@@ -349,7 +351,7 @@ class Board:
         self.record_missing_since = None  # when the record file vanished, for the grace that covers a git reset
         self._git_identity = None  # the -c identity options, found once
         os.makedirs(self.run, exist_ok=True)
-        self.key = start_key(self.path("key"))
+        self.key = start_key(self.path("key")) if serving else ""
         self.port = args.port  # the port held, set once bound: the launcher's proof names it
         self.spent_pass = None  # the last pass traded for the key: a second try at it means two programs held it
 
@@ -1034,11 +1036,16 @@ class Board:
             self._has_git = code == 0 and out.strip() == "true"
         return self._has_git
 
-    def git(self, *args, timeout=60, cwd=None):
+    def git(self, *args, timeout=60, cwd=None, index=None, given=None):
+        """Runs git in the project. `index` names a scratch index to work on in place of the person's own; `given`
+        is the command's input."""
         try:
             # In English, whatever the person's language: what git says is read here ("nothing to commit").
+            env = dict(os.environ, LANGUAGE="en", LC_MESSAGES="C")
+            if index:
+                env["GIT_INDEX_FILE"] = index
             out = subprocess.run(["git", *self.git_options(), *args], cwd=cwd or self.root, capture_output=True, text=True,
-                                 timeout=timeout, env=dict(os.environ, LANGUAGE="en", LC_MESSAGES="C"))
+                                 timeout=timeout, env=env, input=given)
         except (OSError, subprocess.TimeoutExpired) as error:
             return 1, "", str(error)
         return out.returncode, out.stdout.strip(), out.stderr.strip()
@@ -1090,19 +1097,150 @@ class Board:
         mode = made.get("mode") if isinstance(made, dict) else None
         return mode if mode in ("all", "tracked") else None
 
-    def commit_folder(self, message, mode, whole=False):
-        """Commits the project's folder: the files git tracks, and with "all" the new ones too, except any whose name
-        looks like a secret; never the chat log. The commit is of this folder alone: in a larger repository the
-        other folders, and what is staged there, stay as they are. With `whole` it is of the whole repository: the
-        commit before a return, which resets all of it. Refused in the middle of a merge or a rebase, which such a
-        commit would conclude. Returns (an error line or '', the secret-looking files left out)."""
+    def scratch_index(self, start=None):
+        """An index of this route's own, in the run folder: the person's index, and with it what VS Code lists as
+        staged, is never touched. With `start`, a commit, it begins as that commit's files; else empty."""
+        path = self.path(f"index-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}")
+        if start:
+            self.git("read-tree", start, index=path)
+        return path
+
+    def folder_index(self, top, leave=()):
+        """A scratch index holding the project's folder as it is on disk, for the files git tracks there, and the
+        rest of the repository as the branch has it: what is staged or changed in the folders beside the project
+        is not this project's to take. A file the person has staged counts as tracked. The chat log, when git
+        tracks it, stays as the branch has it, and so does every path in `leave`. Returns (the index's path, an
+        error line or '')."""
+        index = self.scratch_index(self.branch_commit() or None)
+        code, tracked, err = self.git("ls-files", "-z", "--full-name", "--", ".")
+        if code != 0:
+            return index, err.split("\n")[0] or "git could not list the folder's files"
+        own = {os.path.realpath(one) for one in self.chat_files()} | set(leave)
+        paths = [one for one in tracked.split("\0") if one and os.path.realpath(os.path.join(top, one)) not in own]
+        if paths:
+            code, out, err = self.git("update-index", "-z", "--add", "--remove", "--stdin", index=index, cwd=top, given="\0".join(paths) + "\0")
+            if code != 0:
+                return index, (err or out).split("\n")[0] or "git could not read the folder's files"
+        return index, ""
+
+    def top(self):
+        """The repository's top folder; the project's own when git does not say."""
+        code, top, _ = self.git("rev-parse", "--show-toplevel")
+        return top if code == 0 and top else self.root
+
+    @staticmethod
+    def drop_index(path):
+        for one in (path, path + ".lock"):
+            try:
+                os.remove(one)
+            except OSError:
+                pass
+
+    def branch_commit(self):
+        """The commit the branch is at; '' in a repository with no commit yet."""
+        code, sha, _ = self.git("rev-parse", "--verify", "-q", "HEAD^{commit}")
+        return sha if code == 0 and COMMIT_ID.match(sha) else ""
+
+    def snapshot(self, message, mode):
+        """A save point aside from the branch: a commit of the project's folder as it is on disk, kept under a ref
+        of Siui's own (refs/siui/save-points/), built through a scratch index. The branch does not move, nothing is
+        staged or unstaged, and VS Code's list of changes stays as it is. What it takes is what a commit of the
+        folder would: the files git tracks, and with "all" the new ones too, except any whose name looks like a
+        secret; never the chat log. Returns (an error line or '', the commit, the secret-looking files left out)."""
+        busy = self.git_busy()
+        if busy:
+            return f"git is in the middle of {busy}; finish it first", "", []
+        index, error = self.folder_index(self.top())
+        try:
+            if error:
+                return error, "", []
+            left_out = []
+            if mode == "all":
+                left_out = [one for one in self.new_files() if looks_secret(one)]
+                # Past forty such files they are no longer a few keys to step around: only tracked files are taken.
+                if len(left_out) <= 40:
+                    code, out, err = self.git("add", "-A", "--", ".", *self.keep_out(self.root), *[f":(exclude,literal){one}" for one in left_out], index=index)
+                    if code != 0 and not re.search(r"nothing to commit|nothing added|no changes added|did not match any file", out + err, re.I):
+                        return (err or out).split("\n")[0] or "git add failed", "", []
+            code, tree, err = self.git("write-tree", index=index)
+            if code != 0 or not COMMIT_ID.match(tree):
+                return (err or tree).split("\n")[0] or "git could not write the save point", "", []
+            head = self.branch_commit()
+            code, sha, err = self.git("commit-tree", tree, *(["-p", head] if head else []), "-m", message)
+            if code != 0 or not COMMIT_ID.match(sha):
+                return (err or sha).split("\n")[0] or "git could not make the save point", "", []
+            code, _, err = self.git("update-ref", f"refs/siui/save-points/{sha}", sha)
+            if code != 0:
+                return err.split("\n")[0] or "git could not keep the save point", "", []
+            return "", sha, left_out
+        finally:
+            self.drop_index(index)
+
+    def stash_before(self, title, fresh, top):
+        """Keeps what a return is about to change or remove as a git stash entry, built by hand so that nothing on
+        disk moves yet: the tracked files of this folder as they are, and the new files the return will take away
+        (`fresh`, paths from the repository's top). It shows in `git stash list` and under Stashes in VS Code, and
+        "apply" brings it back. It holds this folder alone: what is staged or changed beside the project is not in
+        it. Returns (an error line or '', how it is kept, in words)."""
+        head = self.branch_commit()
+        if not head:
+            # No commit yet, so git has nothing to hang a stash on: a save point of Siui's own keeps it.
+            error, sha, _ = self.snapshot(f"Before returning to {title}", "all")
+            return error, f"the save point {sha[:7]}"
+        _, branch, _ = self.git("rev-parse", "--abbrev-ref", "HEAD")
+        branch = branch if branch and branch != "HEAD" else "(no branch)"
+        subject = f"Siui: before returning to {title}"
+        # The record is the present's and is put back after every return: kept out, so the entry can be applied
+        # later over a record that has moved on.
+        index, error = self.folder_index(top, leave={os.path.realpath(self.record_path())})
+        try:
+            if error:
+                return error, ""
+            code, worked, err = self.git("write-tree", index=index)
+            if code != 0 or not COMMIT_ID.match(worked):
+                return (err or worked).split("\n")[0] or "git could not keep the folder's files", ""
+        finally:
+            self.drop_index(index)
+        _, head_tree, _ = self.git("rev-parse", f"{head}^{{tree}}")
+        if worked == head_tree and not fresh:
+            return "", "nothing: the folder held no change"
+        parents = ["-p", head]
+        # A stash entry has a second commit for what was staged. Staging is not kept apart here: it is the branch's.
+        code, staged_commit, err = self.git("commit-tree", head_tree, "-p", head, "-m", f"index on {branch}: {subject}")
+        if code != 0 or not COMMIT_ID.match(staged_commit):
+            return err.split("\n")[0] or "git could not keep the index", ""
+        parents += ["-p", staged_commit]
+        if fresh:
+            index = self.scratch_index()
+            try:
+                code, out, err = self.git("update-index", "-z", "--add", "--stdin", index=index, cwd=top, given="\0".join(fresh) + "\0")
+                if code != 0:
+                    return (err or out).split("\n")[0] or "git could not keep the new files", ""
+                code, new_tree, err = self.git("write-tree", index=index)
+            finally:
+                self.drop_index(index)
+            code_made, new_commit, err_made = self.git("commit-tree", new_tree, "-m", f"untracked files on {branch}: {subject}") if code == 0 else (1, "", err)
+            if code_made != 0 or not COMMIT_ID.match(new_commit):
+                return (err_made or err).split("\n")[0] or "git could not keep the new files", ""
+            parents += ["-p", new_commit]
+        code, kept, err = self.git("commit-tree", worked, *parents, "-m", f"On {branch}: {subject}")
+        if code != 0 or not COMMIT_ID.match(kept):
+            return err.split("\n")[0] or "git could not keep the state before", ""
+        code, _, err = self.git("stash", "store", "-m", f"On {branch}: {subject}", kept)
+        if code != 0:
+            return err.split("\n")[0] or "git could not store the stash entry", ""
+        return "", f'the git stash entry "{subject}"'
+
+    def commit_folder(self, message, mode):
+        """Commits the project's folder to the branch, as the end of a world does (the launcher's `save … commit`):
+        the files git tracks, and with "all" the new ones too, except any whose name looks like a secret; never the
+        chat log. The commit is of this folder alone: in a larger repository the other folders, and what is staged
+        there, stay as they are. Refused in the middle of a merge or a rebase, which such a commit would conclude.
+        Returns (an error line or '', the secret-looking files left out)."""
         busy = self.git_busy()
         if busy:
             return f"git is in the middle of {busy}; finish it first", []
         cwd = self.root
-        if whole:
-            code, top, _ = self.git("rev-parse", "--show-toplevel")
-            cwd = top if code == 0 and top else self.root
         aside = self.keep_out(cwd)
         # A folder with nothing git tracks has nothing for these to match: that is no error.
         nothing = r"nothing to commit|nothing added|no changes added|did not match any file"
@@ -1121,8 +1259,9 @@ class Board:
         return "", left_out
 
     def checkpoint(self, body):
-        """Commits the project's folder as a save point and records it on the stage. New files are added only when
-        the person agreed: while they have not chosen and there are some, the answer names them and asks."""
+        """Takes a save point of the project's folder, aside from the branch, and records it on the stage. New files
+        are taken only when the person agreed: while they have not chosen and there are some, the answer names them
+        and asks."""
         title = str(body.get("title") or "").strip()[:60] or "Checkpoint"
         code, _, _ = self.git("rev-parse", "--is-inside-work-tree")
         if code != 0:
@@ -1136,12 +1275,9 @@ class Board:
                 return {"ok": False, "ask": "newFiles", "files": fresh[:6], "count": len(fresh), "error": "choose how save points treat new files"}
             mode = "all"
         with self.lock:
-            error, left_out = self.commit_folder(f"Checkpoint: {title}", mode)
+            error, sha, left_out = self.snapshot(f"Save point: {title}", mode)
             if error:
                 return {"ok": False, "error": error}
-            code, sha, _ = self.git("rev-parse", "--verify", "-q", "HEAD^{commit}")
-            if code != 0 or not COMMIT_ID.match(sha):
-                return {"ok": False, "error": "nothing is committed in this repository yet, so there is no commit to save as"}
             _, branch, _ = self.git("rev-parse", "--abbrev-ref", "HEAD")
             record = self.read_record(fresh=True)
             if not isinstance(record, dict):
@@ -1158,7 +1294,11 @@ class Board:
         return {"ok": True, "id": made["id"], "commit": sha, "leftOut": left_out[:6]}
 
     def revert(self, body):
-        """Returns the tree to a checkpoint. What is there now is committed and tagged first, so nothing is lost."""
+        """Returns the project's files to a save point. The branch stays where it is: the files of this folder become
+        what they were, files made since are taken away, and whatever then differs from the branch shows as a
+        change. What the return changes or removes is kept first, as a git stash entry, so nothing is lost. A file
+        git would not keep (an ignored one, one whose name looks like a secret) is never touched; when the save
+        point holds something at such a file's path, the return waits until the file is moved away."""
         event_id = str(body.get("id") or "").strip()
         with self.lock:
             record = self.read_record(fresh=True)
@@ -1175,7 +1315,10 @@ class Board:
             code, _, _ = self.git("cat-file", "-e", f"{target['commit']}^{{commit}}")
             if code != 0:
                 return {"ok": False, "error": f"commit {target['commit'][:7]} is not in this repository"}
-            # The chat log and its archives are this machine's: read now, written back after the reset.
+            busy = self.git_busy()
+            if busy:
+                return {"ok": False, "error": f"git is in the middle of {busy}; finish it first"}
+            # The chat log and its archives are this machine's: read now, written back after.
             chat_kept = {}
             for one in self.chat_files():
                 try:
@@ -1185,36 +1328,35 @@ class Board:
                     pass
             code, top, _ = self.git("rev-parse", "--show-toplevel")
             top = top if code == 0 and top else self.root
-            # The reset below is of the whole repository. A file git does not hold now, which the save point holds,
-            # would be written over with nothing kept (a file left out of every commit, a secret among them): the
-            # return waits until it is moved away. The record and the chat log are put back by this route itself.
+            # Every path below is from the repository's top; only this folder's are looked at.
             code, held, _ = self.git("ls-tree", "-r", "--name-only", "-z", "--full-tree", target["commit"])
-            code_now, known, _ = self.git("ls-files", "-z", cwd=top)
-            if code != 0 or code_now != 0:
-                return {"ok": False, "error": "git could not list the save point's files; nothing was changed"}
-            # Safe: what git tracks now, and the new files the commit made first will take. Past forty secret-looking
-            # new files that commit takes tracked files only (commit_folder), so no new file is safe then.
-            fresh = self.new_files(top)
-            taken = len([one for one in fresh if looks_secret(one)]) <= 40
-            safe = set(known.split("\0")) | ({one for one in fresh if not looks_secret(one)} if taken else set())
+            code_tracked, tracked, _ = self.git("ls-files", "-z", "--full-name", "--", ".")
+            code_fresh, fresh, _ = self.git("ls-files", "--others", "--exclude-standard", "-z", "--full-name", "--", ".")
+            if code != 0 or code_tracked != 0 or code_fresh != 0:
+                return {"ok": False, "error": "git could not list the files; nothing was changed"}
             own = {os.path.realpath(self.record_path()), *[os.path.realpath(one) for one in chat_kept]}
+            folder = os.path.relpath(os.path.realpath(self.root), os.path.realpath(top)).replace(os.sep, "/")
+            under = "" if folder == "." else folder + "/"
+            held = [one for one in held.split("\0") if one and one.startswith(under)]
+            tracked = {one for one in tracked.split("\0") if one}
+            # New files the stash will take: not ignored, not secret-looking, not the chat log.
+            fresh = [one for one in fresh.split("\0") if one and not looks_secret(one) and os.path.realpath(os.path.join(top, one)) not in own]
+            kept_paths = tracked | set(fresh)
             at_risk, seen = [], {}
 
             def in_the_way(path):
-                """A file or a link on disk at this path, which neither git nor this route keeps."""
+                """A file or a link on disk at this path, which the stash will not keep."""
                 if path not in seen:
                     full = os.path.join(top, path)
-                    seen[path] = (path not in safe and os.path.lexists(full) and (os.path.islink(full) or not os.path.isdir(full))
+                    seen[path] = (path not in kept_paths and os.path.lexists(full) and (os.path.islink(full) or not os.path.isdir(full))
                                   and os.path.realpath(full) not in own)
                 return seen[path]
 
-            for one in held.split("\0"):
-                if not one:
-                    continue
+            for one in held:
                 # The path itself, a folder of other things at that path, or a file where the save point has a folder.
                 parts = one.split("/")
                 full = os.path.join(top, one)
-                if in_the_way(one) or (one not in safe and os.path.isdir(full) and not os.path.islink(full)):
+                if in_the_way(one) or (one not in kept_paths and os.path.isdir(full) and not os.path.islink(full)):
                     at_risk.append(one)
                 else:
                     blocked = next(("/".join(parts[:i]) for i in range(1, len(parts)) if in_the_way("/".join(parts[:i]))), None)
@@ -1224,21 +1366,40 @@ class Board:
             if at_risk:
                 names = ", ".join(at_risk[:3]) + (" and more" if len(at_risk) > 3 else "")
                 return {"ok": False, "error": f"the save point would write over files git does not hold now ({names}); move them away first"}
-            # What is here now is kept first, all of the repository and new files too: this commit stays behind under
-            # a tag, off the branch.
-            error, _ = self.commit_folder(f"Before returning to checkpoint: {target['title']}", "all", whole=True)
+            error, kept = self.stash_before(target["title"], fresh, top)
             if error:
                 return {"ok": False, "error": error}
-            stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
-            kept = f"checkpoints/before-{stamp}"
-            code, _, err = self.git("tag", kept, "HEAD")
+            # Files made since the save point leave the folder; each is in the stash entry, or as the branch has it.
+            wanted = set(held)
+            for one in sorted(kept_paths - wanted, key=len, reverse=True):
+                full = os.path.join(top, one)
+                if not os.path.lexists(full) or os.path.realpath(full) in own:
+                    continue
+                try:
+                    os.remove(full)
+                except OSError:
+                    continue
+                parent = os.path.dirname(full)
+                while parent.startswith(os.path.realpath(self.root) + os.sep) or parent.startswith(self.root + os.sep):
+                    try:
+                        os.rmdir(parent)
+                    except OSError:
+                        break
+                    parent = os.path.dirname(parent)
+            # The save point's files are written over what is there, through a scratch index.
+            index = self.scratch_index(target["commit"])
+            try:
+                code, out, err = self.git("checkout-index", "-f", "-z", "--stdin", index=index, cwd=top, given="\0".join(held) + "\0") if held else (0, "", "")
+            finally:
+                self.drop_index(index)
             if code != 0:
-                return {"ok": False, "error": err.split("\n")[0] or "could not keep the current state"}
-            code, _, err = self.git("reset", "--hard", target["commit"])
-            if code != 0:
-                return {"ok": False, "error": err.split("\n")[0] or "the reset failed"}
-            # The record and the chat log live in the tree: put the present ones back, with the return on the map.
+                return {"ok": False, "error": f"{(err or out).splitlines()[0] if (err or out) else 'git could not write the files'}; what was there is kept as {kept}"}
+            # The person's index goes back to the branch's for this folder, so that everything that now differs from
+            # the branch shows as a change, none of it staged.
+            if self.branch_commit():
+                self.git("reset", "-q", "--", ".")
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
             try:
                 world = int(body.get("world"))
             except (TypeError, ValueError):
@@ -1246,9 +1407,10 @@ class Board:
             level = str(body.get("level") or "").strip() or target["level"]
             record.setdefault("events", []).append({
                 "id": f"pipe-return-{stamp.replace('T', '-')}", "kind": "pipe", "title": f"Returned to {target['title']}",
-                "text": f"The state left behind is kept as the tag {kept}.", "world": world, "level": level, "at": now,
+                "text": f"The branch did not move. What was there is kept as {kept}."[:240], "world": world, "level": level, "at": now,
                 "status": "done", "doneAt": now, "to": {"world": target["world"], "level": target["level"]},
             })
+            # The record and the chat log are the present's, whatever the save point held: they are put back.
             write_json(self.record_path(), record)
             for one, text in chat_kept.items():
                 if not self.inside(one):
@@ -1258,7 +1420,7 @@ class Board:
                         handle.write(text)
                 except OSError:
                     pass
-        self.prompt({"text": f"I returned the project to a save point (commit {target['commit'][:7]}) from the board; the state before is kept as the git tag {kept}. Re-read the files you rely on before going on."})
+        self.prompt({"text": f"I returned the project's files to a save point (commit {target['commit'][:7]}) from the board. My branch did not move; what was there before is kept as a git stash entry. Re-read the files you rely on before going on."})
         return {"ok": True, "keptAs": kept}
 
     def back(self, body):

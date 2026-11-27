@@ -46,8 +46,9 @@ export const PROTOCOL_SECTION = [
   "'bug', 'feature', 'problem', 'check' or 'jump', or set `mark` on the card or the note that",
   'carries it, so it lands on the stage by itself. Mark it done with the event tool when it is',
   'fixed, built, cleared, passed or taken.',
-  "(13) Before a change that is hard to undo, and after a boss is applied, save a 'checkpoint'",
-  'with mcp__siui__event: a commit of the whole tree the user can return to from the board.',
+  "(13) Before a change that is hard to undo, save a 'checkpoint' with mcp__siui__event: a snapshot",
+  "of the project's folder, kept aside from the user's branch, that they can return to from the",
+  'board. The end of a world saves one by itself and commits the work.',
   '(14) Answers marked [auto-pilot] in the status were taken by auto-pilot, not the user: the',
   "boss card lists them under 'taken by auto-pilot' so the user can change one before applying.",
 ].join(' ')

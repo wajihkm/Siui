@@ -61,9 +61,10 @@ every command, the board, the universes, the record and the configuration.
   the board and in the exports; the model and the session's usage beside the chat's state.
 - Auto-pilot: a card with a recommendation is answered with it after a countdown; a boss,
   a bug, a problem or a card without advice waits for you.
-- Checkpoints: save points, a git commit of the project's folder, drawn on the stage; new
-  files only once you agreed, never one that looks like a secret; returning to one tags
-  what is there first, so nothing is lost.
+- Checkpoints: save points, a snapshot of the project's folder kept aside from your
+  branch, drawn on the stage; new files only once you agreed, never one that looks like a
+  secret; returning to one brings the files back and keeps what was there as a git stash
+  entry, so nothing is lost.
 - Forks: a stage splits into two roads, each a git branch, the remaining cards asked on
   each; the castle merges the road kept and tags the other.
 - Universes: the board's words, icons, colours and shapes from one set, twelve shipped and

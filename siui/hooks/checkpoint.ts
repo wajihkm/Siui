@@ -1,18 +1,20 @@
-// Checkpoints: save points on a stage. A checkpoint is a git commit of the
-// project's folder on the current branch; the board's server returns the
-// tree to one on its own (it commits and tags what is there first, so nothing
-// is lost). Forks make two branches from a checkpoint, roads a and b, one on
-// disk at a time; the castle merges the road kept and tags the other.
+// Checkpoints: save points on a stage. A save point is a snapshot of the
+// project's folder kept aside, under a ref of Siui's own: the branch does not
+// move and the list of changes stays as it is. The board's server returns the
+// folder's files to one on its own, keeping what was there as a git stash
+// entry. Only the end of a world commits to the branch, as the person chose.
+// Forks make two branches from a commit, roads a and b, one on disk at a
+// time; the castle merges the road kept and tags the other.
 //
-// What such a commit takes is bounded: the project's folder alone, though the
-// repository may be larger; the files git tracks, and new ones only when the
-// person agreed (`all`); never a file whose name looks like a secret; nothing
-// at all in the middle of a merge or a rebase.
+// What a save point or such a commit takes is bounded: the project's folder
+// alone, though the repository may be larger; the files git tracks, and new
+// ones only when the person agreed (`all`); never a file whose name looks
+// like a secret; nothing at all in the middle of a merge or a rebase.
 
 import type { EngineInterface } from 'claude-code'
 
 import { CHAT_PATH } from './chat'
-import { join } from './paths'
+import { join, launch } from './paths'
 import { timeSuffix } from './record'
 
 /** How a save point treats files git does not know yet: all of them, or only the files it tracks. */
@@ -197,7 +199,40 @@ function isSoundFork(fork: RunFork): boolean {
 const UNSOUND = 'the record names this fork with a branch that is not one of its own'
 
 
-/** Commits the project's folder as a checkpoint; resolves the commit, the branch and the files left out, or an error line. */
+/**
+ * Takes a save point through the launcher, which holds the one tested way to
+ * do it, the board's own. `aside` keeps a snapshot of the folder under a ref
+ * of Siui's own and leaves the branch, the index and the list of changes as
+ * they are. `commit` commits the folder to the branch: the end of a world.
+ * Resolves the commit, the branch and the files left out, or an error line.
+ */
+export async function savePoint(
+  $: EngineInterface,
+  root: string,
+  run: string,
+  chatLog: string,
+  title: string,
+  mode: SaveMode,
+  how: 'aside' | 'commit',
+): Promise<{ commit: string; branch: string; leftOut: string[] } | { error: string }> {
+  try {
+    const ran = await launch($, ['save', root, run, chatLog, mode, how, title], 120_000)
+    const last = ran.stdout.trim().split('\n').pop() ?? ''
+    const made = JSON.parse(last === '' ? '{}' : last) as { error?: unknown; commit?: unknown; branch?: unknown; leftOut?: unknown }
+    if (typeof made.error === 'string' && made.error !== '') return { error: made.error }
+    if (typeof made.commit !== 'string' || !/^[0-9a-f]{7,64}$/.test(made.commit)) return { error: 'the save point was not made' }
+
+    return {
+      commit: made.commit,
+      branch: typeof made.branch === 'string' && made.branch !== '' ? made.branch : 'HEAD',
+      leftOut: Array.isArray(made.leftOut) ? made.leftOut.filter((one): one is string => typeof one === 'string') : [],
+    }
+  } catch (error) {
+    return { error: String(error) }
+  }
+}
+
+/** Commits the project's folder as a checkpoint, for a fork's start; resolves the commit, the branch and the files left out, or an error line. */
 export async function saveCheckpoint(
   $: EngineInterface,
   root: string,
