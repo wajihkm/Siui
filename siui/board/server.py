@@ -32,6 +32,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import socket
 import struct
@@ -88,14 +89,27 @@ def peer_row(client, server_port):
     The second part matters as much as the first: once a caller closes its end, its row stays for a moment and is
     nobody's, which the kernel writes as the system's own user."""
     host, port = client[0], client[1]
+
+    def written(address, family):
+        """An address as the kernel's table writes it: each 32-bit word in this machine's byte order, in hex."""
+        packed = socket.inet_pton(family, address)
+        return "".join("%08X" % struct.unpack("=I", packed[i:i + 4])[0] for i in range(0, len(packed), 4))
+
     try:
-        local = "%08X:%04X" % (struct.unpack("=I", socket.inet_aton(host))[0], port)
-        there = "%08X:%04X" % (struct.unpack("=I", socket.inet_aton("127.0.0.1"))[0], server_port)
-        with open("/proc/net/tcp", encoding="ascii") as handle:
-            for row in handle:
-                parts = row.split()
-                if len(parts) > 7 and parts[1] == local and parts[2] == there:
-                    return int(parts[7]), parts[3] == "01"
+        # The caller's own socket may be an IPv4 one or an IPv6 one that reaches this address as ::ffff:127.0.0.1;
+        # the kernel lists the two in tables of their own.
+        tables = (("/proc/net/tcp", socket.AF_INET, host, "127.0.0.1"), ("/proc/net/tcp6", socket.AF_INET6, "::ffff:" + host, "::ffff:127.0.0.1"))
+        for table, family, here, there in tables:
+            local = "%s:%04X" % (written(here, family), port)
+            remote = "%s:%04X" % (written(there, family), server_port)
+            try:
+                with open(table, encoding="ascii") as handle:
+                    for row in handle:
+                        parts = row.split()
+                        if len(parts) > 7 and parts[1] == local and parts[2] == remote:
+                            return int(parts[7]), parts[3] == "01"
+            except FileNotFoundError:
+                continue
     except (OSError, ValueError, struct.error):
         return None
     return None
@@ -110,7 +124,17 @@ def is_foreign(uid, mine):
 
 def has_hung_up(connection):
     """Whether the caller has already closed its end. A browser waits for its answer; a caller that hangs up at once
-    leaves no row in the kernel's table for `peer_uid` to read, and is treated as one that meant to."""
+    leaves no row in the kernel's table for `peer_row` to read, and is treated as one that meant to. The kernel is
+    asked directly where it can be (it says so whatever is still unread on the connection); elsewhere one byte is
+    looked at."""
+    gone = getattr(select, "POLLRDHUP", 0)
+    if gone and hasattr(select, "poll"):
+        try:
+            watch = select.poll()
+            watch.register(connection.fileno(), gone | select.POLLHUP | select.POLLERR)
+            return any(flags & (gone | select.POLLHUP | select.POLLERR | select.POLLNVAL) for _, flags in watch.poll(0))
+        except (OSError, ValueError):
+            return True
     try:
         connection.setblocking(False)
         try:
@@ -161,8 +185,8 @@ SECRET_LIKE = re.compile(
     r"|\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\.tfstate\.backup$"
     r"|(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$"
     r"|(^|/)\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\.docker/config\.json$|(^|/)kubeconfig$"
-    r"|(^|/)(credentials?|secrets?)(\.[a-z0-9]+)?$"
-    r"|(^|/)(client[-_]secret|service[-_]?account)[^/]*\.(json|ya?ml|p12|pem|key|txt)$", re.I)
+    r"|(^|/)(credentials?|secrets?)(\.(json|ya?ml|toml|ini|env|txt|xml|properties|cfg|conf|csv))?$"
+    r"|(^|/)client[-_]secret[^/]*\.(json|ya?ml|p12|pem|key|txt)$|(^|/)service[-_]?account[^/]*\.(json|p12|pem|key)$", re.I)
 # What the list above would take but is made to be shared: a sample of an env file, a public key.
 SHARED_LIKE = re.compile(r"(^|/)\.env[._-](example|sample|template|dist|defaults?)$|(^|/)(example|sample|template)[^/]*\.env$|\.pub$", re.I)
 
@@ -1035,13 +1059,17 @@ class Board:
         full = os.path.join(self.root, self.chat)
         if os.path.isdir(full) or not self.inside(full):
             return []
-        log = os.path.relpath(full, cwd).replace(os.sep, "/")
-        specs = [":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", log[:-6]) + "-*.jsonl"]
-        # The log itself is named only while git could take it. One that git ignores already needs no keeping out,
-        # and git refuses an add that names an ignored file by its path, even to leave it out.
-        code, _, _ = self.git("check-ignore", "-q", "--", log, cwd=cwd)
-        if code != 0:
-            specs.insert(0, f":(exclude,literal){log}")
+        # Both ends with their links followed: git names the top that way, and the project may be opened through one.
+        log = os.path.relpath(os.path.realpath(full), os.path.realpath(cwd)).replace(os.sep, "/")
+        # git refuses an add that names something it ignores, even to leave it out: the log by its path, and the
+        # archives' pattern when their whole folder is ignored (any name in it then is, a made-up one too). What git
+        # ignores it cannot take, so each is named only while git could take it.
+        specs = []
+        if self.git("check-ignore", "-q", "--", log, cwd=cwd)[0] != 0:
+            specs.append(f":(exclude,literal){log}")
+        folder = os.path.dirname(log)
+        if self.git("check-ignore", "-q", "--", (folder + "/" if folder else "") + ".siui-no-such-file", cwd=cwd)[0] != 0:
+            specs.append(":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", log[:-6]) + "-*.jsonl")
         return specs
 
     def git_busy(self):
@@ -1164,8 +1192,11 @@ class Board:
             code_now, known, _ = self.git("ls-files", "-z", cwd=top)
             if code != 0 or code_now != 0:
                 return {"ok": False, "error": "git could not list the save point's files; nothing was changed"}
-            # Safe: what git tracks now, and the new files the commit made first will take.
-            safe = set(known.split("\0")) | {one for one in self.new_files(top) if not looks_secret(one)}
+            # Safe: what git tracks now, and the new files the commit made first will take. Past forty secret-looking
+            # new files that commit takes tracked files only (commit_folder), so no new file is safe then.
+            fresh = self.new_files(top)
+            taken = len([one for one in fresh if looks_secret(one)]) <= 40
+            safe = set(known.split("\0")) | ({one for one in fresh if not looks_secret(one)} if taken else set())
             own = {os.path.realpath(self.record_path()), *[os.path.realpath(one) for one in chat_kept]}
             at_risk, seen = [], {}
 
@@ -1468,6 +1499,10 @@ def make_handler(board):
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 self.send_json({"ok": False, "error": "bad JSON"}, 400)
+                return
+            except OSError:
+                # The caller left in the middle of what it was sending.
+                self.close_connection = True
                 return
             if not isinstance(body, dict):
                 body = {}

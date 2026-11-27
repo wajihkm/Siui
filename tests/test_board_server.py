@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -296,28 +297,58 @@ class BoardServer(unittest.TestCase):
         self.assertEqual([server.is_foreign(uid, 1000) for uid in (None, 0, 1000, 1001)], [False, False, False, True])
         self.assertFalse(server.is_foreign(1001, None))
         self.assertFalse(server.is_foreign(1001, 0), "a server run as the system's user holds nobody apart: the key decides there")
-        if not os.path.exists("/proc/net/tcp"):
-            self.skipTest("this system has no table of connections to read")
+        if not os.path.exists("/proc/net/tcp") or os.getuid() == 0:
+            self.skipTest("this system has no table of connections to read, or the test runs as the system's user")
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
-        listener.listen(1)
-        caller = socket.socket()
+        listener.listen(4)
+        port = listener.getsockname()[1]
         try:
-            caller.connect(listener.getsockname())
-            accepted, address = listener.accept()
-            self.assertEqual(server.peer_row(address, listener.getsockname()[1]), (os.getuid(), True))
-            # A caller still there is not taken for one that hung up; one that closed is, and its row, while it
-            # lasts, no longer says it is connected (the kernel shows such a row as the system's own user's).
-            self.assertFalse(server.has_hung_up(accepted))
-            caller.close()
-            time.sleep(0.05)
-            self.assertTrue(server.has_hung_up(accepted))
-            row = server.peer_row(address, listener.getsockname()[1])
-            self.assertTrue(row is None or row[1] is False, row)
-            accepted.close()
+            # The rule itself, with the kernel's answer given: every branch of it.
+            handler = mock.Mock(client_address=("127.0.0.1", 1), connection=None)
+            for row, gone, refused in (((os.getuid(), True), False, False), ((0, True), False, False), ((os.getuid() + 1, True), False, True),
+                                       ((os.getuid(), False), False, True), ((0, False), False, True), (None, True, True), (None, False, False)):
+                with mock.patch.object(server, "peer_row", return_value=row), mock.patch.object(server, "has_hung_up", return_value=gone):
+                    self.assertEqual(server.foreign_caller(handler, port), refused, (row, gone))
+            # The kernel's table, read for a caller on either kind of socket.
+            for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::ffff:127.0.0.1")):
+                caller = socket.socket(family)
+                try:
+                    caller.connect((address, port))
+                except OSError:
+                    caller.close()
+                    continue  # no IPv6 on this machine
+                accepted, seen = listener.accept()
+                self.assertEqual(server.peer_row(seen, port), (os.getuid(), True), address)
+                self.assertFalse(server.has_hung_up(accepted), address)
+                # Gone, with bytes it sent still unread here: the kernel says so all the same.
+                caller.sendall(b"x" * 20000)
+                time.sleep(0.05)
+                if family == socket.AF_INET:
+                    caller.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                caller.close()
+                time.sleep(0.05)
+                self.assertTrue(server.has_hung_up(accepted), address)
+                row = server.peer_row(seen, port)
+                self.assertTrue(row is None or row[1] is False, (address, row))
+                accepted.close()
         finally:
-            caller.close()
             listener.close()
+
+    def test_which_names_look_like_secrets(self):
+        spec = importlib.util.spec_from_file_location("siui_board_server_names", SERVER)
+        server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(server)
+        secret = [".env", "a/.env", ".env.local", ".env-production", ".envrc", "prod.env", "x.pem", "deploy/server.key", "id_rsa", ".ssh/id_ed25519",
+                  "id_rsa_github", "terraform.tfvars", "terraform.tfstate", "terraform.tfstate.backup", "service-account.json", "serviceaccount-prod.json",
+                  "client_secret_123.json", "kubeconfig", "dev.kubeconfig", ".htpasswd", ".pgpass", ".npmrc", "credentials.json", "credentials",
+                  "secrets.yaml", "config/secrets.toml", "secret", ".docker/config.json", "a.p12", "x.kdbx"]
+        shared = [".env.example", ".env.sample", "a/.env.template", "example.env", "config/sample.env", "id_rsa.pub", ".ssh/id_ed25519.pub", "src/app.py",
+                  "README.md", "environment.ts", "keyboard.py", "docs/secrets-management.md", "src/env.py", "package.json", "tokens.css", "secretary.txt",
+                  "credentials-form.tsx", "credentials.ts", "secrets.py", "src/secrets.rs", ".envoy.yaml", "service_account_test.go",
+                  "client-secret-rotation.md", "templates/serviceaccount.yaml", "chart/templates/service-account.yaml"]
+        self.assertEqual([one for one in secret if not server.looks_secret(one)], [], "a secret-looking name passes")
+        self.assertEqual([one for one in shared if server.looks_secret(one)], [], "a name made to be shared is held back")
 
     def test_a_record_of_odd_shapes_still_gets_an_answer(self):
         for odd in ({"format": 1, "runs": [5, None, "x", {"decisions": 7}, {"decisions": [3, {"sources": 9}, {"sources": [4, {"path": "a\u0000b"}]}]}]},
@@ -599,6 +630,85 @@ class SavePoints(unittest.TestCase):
             self.assertFalse([one for one in files if "chat-log" in one], mode)
         self.assertIn("project/.claude/.gitignore", self.git("ls-files"))
 
+    def test_a_save_point_when_the_logs_whole_folder_is_ignored(self):
+        """Many projects ignore .claude/ whole. git then refuses an add that names anything in it, a pattern too."""
+        self.write(".gitignore", ".claude/\n")
+        self.write("project/.claude/chat-log.jsonl", '{"user": "my own prompt"}\n')
+        self.write("project/.claude/chat-log-2026-10-01.jsonl", '{"user": "an archive"}\n')
+        for mode in ("all", "tracked"):
+            self.write("project/src/app.py", f"print('{mode}')\n")
+            _, answer, _ = self.board.call("POST", "/checkpoint", {"title": mode, "world": 1, "level": "1-1", "newFiles": mode})
+            self.assertEqual(answer["ok"], True, answer)
+            self.assertIn("project/src/app.py", self.committed(answer["commit"]), mode)
+            self.assertFalse([one for one in self.committed(answer["commit"]) if "chat-log" in one], mode)
+
+    def test_a_return_when_the_commit_before_it_takes_no_new_file(self):
+        """Past forty secret-looking new files the commit before a return takes tracked files only. A new file the
+        save point also holds is then kept nowhere: the return must wait, not write over it."""
+        self.git("stash", "-q", "-u")
+        self.write("project/notes.md", "the save point's\n")
+        self.git("add", "project/notes.md")
+        self.git("commit", "-q", "-m", "holds notes")
+        held = self.git("rev-parse", "HEAD")
+        self.git("rm", "-q", "--cached", "project/notes.md")
+        self.git("commit", "-q", "-m", "notes no longer tracked")
+        self.write("project/notes.md", "mine, written since\n")
+        for i in range(41):
+            self.write(f"project/keys/key-{i}.pem", "k\n")
+        self.plant(held)
+        _, back, _ = self.board.call("POST", "/revert", {"id": "checkpoint-planted", "world": 1, "level": "1-1"})
+        if back["ok"]:
+            self.assertEqual(self.git("show", f"{back['keptAs']}:project/notes.md"), "mine, written since", "a new file was written over and kept nowhere")
+        else:
+            self.assertIn("write over", back["error"])
+            with open(os.path.join(self.repo, "project", "notes.md"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "mine, written since\n")
+
+    def test_a_return_waits_for_a_folder_where_the_save_point_has_a_file(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/cache", "a file at the save point\n")
+        self.git("add", "project/cache")
+        self.git("commit", "-q", "-m", "holds a file named cache")
+        held = self.git("rev-parse", "HEAD")
+        self.git("rm", "-q", "--cached", "project/cache")
+        os.remove(os.path.join(self.repo, "project", "cache"))
+        self.git("commit", "-q", "-m", "no longer")
+        self.write(".gitignore", "project/cache/\n")
+        self.write("project/cache/mine.bin", "ignored, and mine\n")
+        self.plant(held)
+        _, back, _ = self.board.call("POST", "/revert", {"id": "checkpoint-planted", "world": 1, "level": "1-1"})
+        self.assertEqual(back["ok"], False, back)
+        self.assertIn("write over", back["error"])
+        with open(os.path.join(self.repo, "project", "cache", "mine.bin"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "ignored, and mine\n")
+
+    def test_a_project_reached_through_a_link(self):
+        if os.name == "nt":
+            self.skipTest("links need a privilege on Windows")
+        holder = tempfile.mkdtemp(prefix="siui-test-link-")
+        try:
+            os.symlink(os.path.join(self.repo, "project"), os.path.join(holder, "linked"))
+            board = Running(made=os.path.join(holder, "linked"))
+            try:
+                _, saved, _ = board.call("POST", "/checkpoint", {"title": "through a link", "world": 1, "level": "1-1", "newFiles": "all"})
+                self.assertEqual(saved["ok"], True, saved)
+                self.write("project/src/app.py", "print(3)\n")
+                _, back, _ = board.call("POST", "/revert", {"id": saved["id"], "world": 1, "level": "1-1"})
+                self.assertEqual(back["ok"], True, back)
+                with open(os.path.join(self.repo, "project", "src", "app.py"), encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "print(2)\n")
+            finally:
+                board.stop()
+        finally:
+            shutil.rmtree(holder, ignore_errors=True)
+
+    def test_two_exports_in_one_minute(self):
+        for text in ("# first\n", "# second\n"):
+            _, answer, _ = self.board.call("POST", "/export", {"kind": "md", "text": text})
+            self.assertEqual(answer["ok"], True, answer)
+        with open(os.path.join(self.repo, "project", answer["path"]), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "# second\n")
+
     def test_a_folder_with_nothing_tracked_is_no_error_and_a_save_point_is_always_a_commit(self):
         empty = tempfile.mkdtemp(prefix="siui-test-empty-")
         try:
@@ -787,16 +897,18 @@ class AnotherUser(unittest.TestCase):
         finally:
             connection.close()
 
-    def hit_and_run(self, path, body, reset):
-        """A whole request with the key, and the caller gone before any answer: by a reset, or by a plain close."""
-        import struct
+    def request(self, path, body):
         data = json.dumps(body).encode("utf-8")
-        request = (f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nX-Siui-Key: {self.board.key}\r\n"
-                   f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n\r\n").encode("ascii") + data
+        return (f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nX-Siui-Key: {self.board.key}\r\n"
+                f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n\r\n").encode("ascii") + data
+
+    def hit_and_run(self, path, body, reset, extra=0):
+        """A whole request with the key, and the caller gone before any answer: by a reset, or by a plain close;
+        with `extra`, that many bytes sent after the request and left unread here."""
         caller = socket.create_connection(("127.0.0.1", self.port))
         if reset:
             caller.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        caller.sendall(request)
+        caller.sendall(self.request(path, body) + b"x" * extra)
         caller.close()
 
     def inbox(self):
@@ -825,6 +937,21 @@ class AnotherUser(unittest.TestCase):
                 self.hit_and_run("/prompt", {"text": f"theirs {i}"}, reset=i % 2 == 0)
                 self.hit_and_run("/auto", {"on": True}, reset=i % 2 == 1)
                 self.hit_and_run("/enter", {"pass": "p" * 43}, reset=i % 2 == 0)
+                # Bytes left unread behind the request must not make a caller that is gone look still there.
+                self.hit_and_run("/prompt", {"text": f"theirs, with more {i}"}, reset=True, extra=20000)
+            # A caller on an IPv6 socket, which stays to hear its answer: the kernel lists it in another table.
+            try:
+                caller = socket.socket(socket.AF_INET6)
+                caller.settimeout(5)
+                caller.connect(("::ffff:127.0.0.1", self.port))
+            except OSError:
+                caller = None  # no IPv6 on this machine
+            if caller is not None:
+                try:
+                    caller.sendall(self.request("/prompt", {"text": "theirs, over IPv6"}))
+                    self.assertIn(b" 403 ", caller.recv(200))
+                finally:
+                    caller.close()
             time.sleep(0.5)
         self.assertEqual(self.inbox(), "")
         self.assertFalse(os.path.exists(os.path.join(self.run_folder, "auto.json")))
@@ -833,14 +960,6 @@ class AnotherUser(unittest.TestCase):
         key = self.board.key
         with open(os.path.join(self.run_folder, "key"), encoding="ascii") as handle:
             self.assertEqual(handle.read().strip(), key, "another user made the key change")
-
-    def test_a_caller_that_hangs_up_gets_nothing_done_even_as_the_same_user(self):
-        for i in range(10):
-            self.hit_and_run("/prompt", {"text": f"gone {i}"}, reset=True)
-        time.sleep(0.3)
-        # Either the row was still there (the same user: served) or it was gone (refused): what must never happen is
-        # a caller with no row being served, and that is what the test above pins down for another user.
-        self.assertLessEqual(self.inbox().count("gone"), 10)
 
 
 class OpeningFiles(unittest.TestCase):

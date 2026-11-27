@@ -25,8 +25,8 @@ const SECRET_LIKE = new RegExp(
     '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$',
     '(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$',
     '(^|/)\\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\\.docker/config\\.json$|(^|/)kubeconfig$',
-    '(^|/)(credentials?|secrets?)(\\.[a-z0-9]+)?$',
-    '(^|/)(client[-_]secret|service[-_]?account)[^/]*\\.(json|ya?ml|p12|pem|key|txt)$',
+    '(^|/)(credentials?|secrets?)(\\.(json|ya?ml|toml|ini|env|txt|xml|properties|cfg|conf|csv))?$',
+    '(^|/)client[-_]secret[^/]*\\.(json|ya?ml|p12|pem|key|txt)$|(^|/)service[-_]?account[^/]*\\.(json|p12|pem|key)$',
   ].join('|'),
   'i',
 )
@@ -66,6 +66,8 @@ export async function git($: EngineInterface, root: string, args: readonly strin
     const ran = await $.process.run(['git', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...identity, ...args], {
       cwd: root,
       timeoutMs: 60_000,
+      // In English, whatever the person's language: what git says is read here ("nothing to commit").
+      env: { LANGUAGE: 'en', LC_MESSAGES: 'C' },
     })
 
     return { exitCode: ran.exitCode, stdout: ran.stdout.trim(), stderr: ran.stderr.trim() }
@@ -128,10 +130,14 @@ export async function commitFolder(
   } catch {
     // not there, or not to be read: nothing of it to commit either
   }
-  // The log itself is named only while git could take it. One that git ignores already needs no keeping out, and
-  // git refuses an add that names an ignored file by its path, even to leave it out.
-  if (logPath !== '' && aside.length > 0 && (await git($, root, ['check-ignore', '-q', '--', logPath])).exitCode === 0) {
-    aside = aside.filter(one => !one.startsWith(':(exclude,literal)'))
+  // git refuses an add that names something it ignores, even to leave it out: the log by its path, and the
+  // archives' pattern when their whole folder is ignored (any name in it then is, a made-up one too). What git
+  // ignores it cannot take, so each is named only while git could take it.
+  if (logPath !== '' && aside.length > 0) {
+    const cut = logPath.lastIndexOf('/')
+    const probe = `${cut > 0 ? logPath.slice(0, cut + 1) : ''}.siui-no-such-file`
+    if ((await git($, root, ['check-ignore', '-q', '--', logPath])).exitCode === 0) aside = aside.filter(one => !one.startsWith(':(exclude,literal)'))
+    if ((await git($, root, ['check-ignore', '-q', '--', probe])).exitCode === 0) aside = aside.filter(one => !one.startsWith(':(exclude,glob)'))
   }
   let leftOut: string[] = []
   let add = ['add', '-u', '--', '.', ...aside]
