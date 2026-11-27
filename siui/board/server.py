@@ -406,10 +406,12 @@ class Board:
 
     def pack_folders(self):
         """Where packs may be, each with whose it is: the project's skill and its configured folders ("project"), the
-        plugin's bundled packs ("plugin"), the home folder's skill ("home")."""
+        plugin's bundled packs ("plugin"), the home folder's skill ("home"). The third part says whether the place
+        is one the plugin knows by itself; a folder the configuration names is not, and its name is the project's
+        own text."""
         folders = [
-            (os.path.join(self.root, ".claude", "skills", "decision-cards", "packs"), "project"),
-            (os.path.join(HERE, "..", "packs"), "plugin"),
+            (os.path.join(self.root, ".claude", "skills", "decision-cards", "packs"), "project", True),
+            (os.path.join(HERE, "..", "packs"), "plugin", True),
         ]
         config = read_json(os.path.join(self.root, ".claude", "siui.json"), {})
         # A folder the project's configuration names holds the project's own packs: it lies in the project. Packs
@@ -417,12 +419,12 @@ class Board:
         given = config.get("packs") if isinstance(config, dict) else None
         for extra in given if isinstance(given, list) else []:
             if isinstance(extra, str) and extra and ".." not in extra and "\0" not in extra and not is_network_path(extra) and not os.path.isabs(extra):
-                folders.append((os.path.join(self.root, extra), "project"))
+                folders.append((os.path.join(self.root, extra), "project", False))
         home = os.path.expanduser("~")
         if home and home != "~":
-            folders.append((os.path.join(home, ".claude", "skills", "decision-cards", "packs"), "home"))
+            folders.append((os.path.join(home, ".claude", "skills", "decision-cards", "packs"), "home", True))
         seen, out = set(), []
-        for folder, source in folders:
+        for folder, source, known in folders:
             # A folder of the project's own packs lies in the project, links followed: the skill's folder as well.
             if source == "project" and not self.inside(folder):
                 continue
@@ -430,7 +432,7 @@ class Board:
             if real in seen or not os.path.isdir(real):
                 continue
             seen.add(real)
-            out.append((real, source))
+            out.append((real, source, known))
         return out
 
     UNIVERSE_NAME = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -673,7 +675,7 @@ class Board:
         title_line = re.compile(r"^#\s+(?:World\s+(\d+)\s*:\s*)?(.+?)\s*$")
         hidden = self.hidden_packs()
         found, names = [], set()
-        for folder, source in self.pack_folders():
+        for folder, source, known in self.pack_folders():
             for path in sorted(glob.glob(os.path.join(folder, "*.md"))):
                 name = os.path.basename(path)[:-3]
                 if name == "README" or name in names:
@@ -690,7 +692,9 @@ class Board:
                         # facts is decided once for every later world.
                         "kind": "method" if re.search(r"`kind:`\s*method\b", text, re.I) else "plan",
                         "facts": bool(re.search(r"`facts:`\s*project\b", text, re.I)),
-                        "about": pack_about(lines)}
+                        "about": pack_about(lines),
+                        # Whether its place is one the plugin knows by itself: only then may a prompt to the chat name its path.
+                        "known": known}
                 current = None
                 for line in lines:
                     first = title_line.match(line) if pack["title"] == name and line.startswith("# ") else None

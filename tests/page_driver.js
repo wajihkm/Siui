@@ -85,6 +85,21 @@
     await openDetails('chrome');
     const dialog = document.getElementById('newworld');
     if (dialog && dialog.showModal) { try { click(document.querySelector('[data-new]')); await sleep(80); note('new world'); dialog.querySelectorAll('input[type=radio]').forEach(r => click(r)); await sleep(60); note('new world choices'); } catch (e) { /* no such button on this state */ } closeDialogs(); }
+    // A world started with a method: a title typed, the first method picked, the form sent.
+    if (dialog && dialog.showModal && document.querySelector('[data-new]')) {
+      try {
+        click(document.querySelector('[data-new]')); await sleep(80);
+        const way = Array.from(dialog.querySelectorAll('input[name=method]')).find(r => r.value !== '');
+        if (way) {
+          way.checked = true; way.dispatchEvent(new Event('change', { bubbles: true }));
+          dialog.querySelector('input[name=title]').value = 'login page';
+          const form = dialog.querySelector('form');
+          if (form.requestSubmit) form.requestSubmit(); else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(200); note('new world with a method');
+        }
+      } catch (e) { /* this state has no method */ }
+      closeDialogs();
+    }
 
     // The search: letters every payload holds.
     const box = document.getElementById('searchBox');

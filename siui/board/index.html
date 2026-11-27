@@ -1154,6 +1154,18 @@
     road: v => (v === 'a' || v === 'b' ? v : ''),
     world: v => (Number.isInteger(v) && v >= 0 ? String(v) : typeof v === 'string' && /^\d{1,4}$/.test(v) ? String(Number(v)) : ''),
   };
+  /**
+   * Where a pack's file lies, for a prompt: only when it is in a place the plugin knows by itself (the project's
+   * skill folder, the plugin's own packs, the home folder's skill) and the path is that place and the pack's own
+   * slug. The assistant has no other way to find a pack the plugin ships; but a folder the project's
+   * configuration names could be named with a sentence for it, so such a path is never passed on.
+   */
+  function packPlace(slug) {
+    const pack = ((state && state.packs) || []).find(one => one.name === slug && one.known === true);
+    const path = pack && typeof pack.path === 'string' ? pack.path : '';
+    const tail = `${slug}.md`;
+    return slug && path.length < 400 && !/[\u0000-\u001f]/.test(path) && (path.endsWith('/' + tail) || path.endsWith('\\' + tail)) ? path : '';
+  }
   /** Sends a prompt built from ids; refused when one of them is not an id. */
   async function askChat(text, ...ids) {
     if (ids.some(v => v === '')) { toast('Not sent: an id here is not a plain one (lowercase letters, digits and dashes)'); return false; }
@@ -1400,10 +1412,10 @@
     const way = method ? idOf.slug(method.name) : '';
     if (method && !way) { toast('Not sent: this method\'s name is not a plain one (lowercase letters, digits and dashes)'); return; }
     const text = method
-      ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${way}: read the pack and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${way}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
+      ? `Start world ${n} titled "${title}" about: ${about || title}. Run it with the method ${way}: read the pack${packPlace(way) ? ` at ${packPlace(way)}` : ''} and the inputs its first level lists; its levels are this world's stages, numbered ${n}-1, ${n}-2 and so on. Present its fixed-facts card, then its first card, with pack "${way}", worldTitle "${title.slice(0, 40)}" and world ${n} on every card. No text before the card.`
       : how === 'pack'
       ? `Create world ${n}: write the pack ${name} in this project's .claude/skills/decision-cards/packs/, titled "${title}", about: ${about || title}. Follow the README.md of that packs folder: a fixed-facts list, three levels of three to four cards with ids, titles and options (the recommended first), a boss level last, and the inputs and outputs per level. Then start it as world ${n}: load the skill decision-cards, read the pack and the first level's inputs, and present its fixed-facts card with pack "${name}" and world ${n} on every card. No text before the card.`
-      : `Start an ad-hoc world ${n} titled "${title}" about: ${about || title}. Turn it into levels of three to four cards with a boss last, and present the first card with world ${n} on every card. No text before the card.`;
+      : `Start an ad-hoc world ${n} titled "${title}" about: ${about || title}. Turn it into levels of three to four cards with a boss last, and present the first card with pack "ad-hoc" and world ${n} on every card: without the pack's name a card does not open the world. No text before the card.`;
     if (await post('/prompt', { text })) { $('newworld').close(); toast(how === 'pack' && !method ? `Asked the chat to write and start world ${n}` : `Asked the chat to start world ${n}`); }
   });
 
@@ -1765,7 +1777,8 @@
       }));
       el.querySelector('[data-start]').addEventListener('click', async e => {
         const pack = idOf.slug(e.currentTarget.dataset.start), world = idOf.world(run.world);
-        if (await askChat(`Start the pack ${pack} as world ${world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`, pack, world)) toast('Asked the chat to start it');
+        const at = packPlace(pack);
+        if (await askChat(`Start the pack ${pack} as world ${world}: read the pack${at ? ` at ${at}` : ''}, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`, pack, world)) toast('Asked the chat to start it');
       });
       return;
     }
@@ -1786,7 +1799,7 @@
       const text = answeredHere
         ? `Go on with world ${world}${pack ? ` (pack ${pack})` : ''}: present its next card, with world ${world} on it and no text before it.`
         : pack
-          ? `Start the pack ${pack} as world ${world}: read the pack, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`
+          ? `Start the pack ${pack} as world ${world}: read the pack${packPlace(pack) ? ` at ${packPlace(pack)}` : ''}, read the first level's inputs, and present its fixed-facts card with pack "${pack}" and world ${world} on every card. No text before the card.`
           : `Start world ${world}: present its first card, with world ${world} on every card and no text before it.`;
       if (await askChat(text, world)) toast(answeredHere ? 'Asked the chat to go on' : 'Asked the chat to start it');
     });
@@ -2780,7 +2793,7 @@
     });
     const run = r => {
       // What marks a pack still to start is the page's own to set (pendingPacks): a run of the record cannot pose as one.
-      delete r.isPack; delete r.path; delete r.source;
+      delete r.isPack; delete r.path; delete r.source; delete r.known;
       r.world = Math.max(0, int(r.world, 0)); r.id = str(r.id).replace(/^pack:/, 'run:'); r.pack = str(r.pack); r.target = str(r.target); r.startedAt = day(r.startedAt);
       r.finishedAt = r.finishedAt === null || r.finishedAt === undefined ? null : day(r.finishedAt) || '1970-01-01';
       if (r.abandonedAt !== undefined) { const at = day(r.abandonedAt); if (at) r.abandonedAt = at; else delete r.abandonedAt; }
@@ -2842,7 +2855,7 @@
     Object.keys(obj(d.files)).forEach(k => { const f = obj(d.files[k]); files[k] = f.exists === true ? { exists: true, size: num(f.size), mtime: num(f.mtime), isDir: f.isDir === true } : { exists: false }; });
     d.files = files;
     d.chat = list(d.chat).map(t => ({ at: iso(t.at), world: t.world === null || t.world === undefined ? null : int(t.world, null), level: str(t.level), user: str(t.user), assistant: str(t.assistant) }));
-    d.packs = list(d.packs).map(k => { k.name = str(k.name); k.title = str(k.title) || k.name; k.world = k.world === null || k.world === undefined ? null : int(k.world, null); k.levels = plan(k.levels); k.path = str(k.path); k.source = str(k.source); k.hidden = k.hidden === true; k.kind = k.kind === 'method' ? 'method' : 'plan'; k.facts = k.facts === true; k.about = str(k.about); return k; }).filter(k => k.name);
+    d.packs = list(d.packs).map(k => { k.name = str(k.name); k.title = str(k.title) || k.name; k.world = k.world === null || k.world === undefined ? null : int(k.world, null); k.levels = plan(k.levels); k.path = str(k.path); k.source = str(k.source); k.hidden = k.hidden === true; k.kind = k.kind === 'method' ? 'method' : 'plan'; k.facts = k.facts === true; k.about = str(k.about); k.known = k.known === true; return k; }).filter(k => k.name);
     d.universes = list(d.universes).map(u => ({ name: str(u.name), title: str(u.title) || str(u.name), about: str(u.about), source: str(u.source) }));
     d.config = obj(d.config);
     d.config.theme = obj(d.config.theme);

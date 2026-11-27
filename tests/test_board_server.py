@@ -410,6 +410,9 @@ class BoardServer(unittest.TestCase):
                 self.assertEqual(json.load(handle), record())
             # Only the folder that lies in the project gives packs; one outside can be neither listed nor deleted.
             self.assertEqual([one["name"] for one in state["packs"] if one["source"] == "project"], ["inner-pack"])
+            # A folder the configuration names is not a place the plugin knows by itself; its own packs' folder is.
+            self.assertEqual([one["known"] for one in state["packs"] if one["name"] == "inner-pack"], [False])
+            self.assertEqual([one["known"] for one in state["packs"] if one["name"] == "scaffold"], [True])
             for name in ("private-notes", "shared-pack"):
                 self.assertEqual(board.call("POST", "/pack-delete", {"name": name})[1]["ok"], False)
             self.assertEqual(sorted(os.listdir(outside)), before)
