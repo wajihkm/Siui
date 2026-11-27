@@ -788,6 +788,19 @@ class SavePoints(unittest.TestCase):
         self.assertEqual(self.read("project/.env.example"), "TOKEN=\n")
         self.assertFalse(self.there("project/src/new.py"), "a file that was gone before the return came back with the stash")
 
+    def test_a_return_with_nothing_to_keep_says_so(self):
+        """The first return made in a real session: a save point, then a return at once. Nothing had changed, no
+        stash entry was made, and the chat was told one had been."""
+        self.git("stash", "-q", "-u")
+        saved = self.save("just now", newFiles="all")
+        back = self.back(saved["id"])
+        self.assertEqual((back["ok"], back["keptAs"]), (True, ""), back)
+        self.assertNotIn("Siui", self.git("stash", "list"))
+        self.assertIn("nothing to keep", self.board.prompts()[-1])
+        self.assertNotIn("stash", self.board.prompts()[-1])
+        with open(os.path.join(self.repo, "project", ".claude", "decisions.json"), encoding="utf-8") as handle:
+            self.assertIn("nothing to keep", json.load(handle)["events"][-1]["text"])
+
     def test_a_return_touches_nothing_beside_the_project(self):
         saved = self.save("good", newFiles="all")
         self.write("project/src/app.py", "print(3)\n")

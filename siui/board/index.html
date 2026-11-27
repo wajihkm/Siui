@@ -1175,7 +1175,7 @@
       b.disabled = true;
       const data = await post('/revert', { id: b.dataset.return, world: Number(f.dataset.world), level: f.dataset.level });
       b.disabled = false;
-      if (data) toast(`Returned; what was there is kept as ${data.keptAs}`);
+      if (data) toast(data.keptAs ? `Returned; what was there is kept as ${data.keptAs}` : 'Returned; nothing had changed since, so there was nothing to keep');
     }));
     el.querySelectorAll('[data-move-event]').forEach(b => b.addEventListener('click', () => moveThing({ kind: 'event', id: b.dataset.moveEvent }, Number(b.dataset.world), b.dataset.level)));
     el.querySelectorAll('[data-done]').forEach(b => b.addEventListener('click', async () => { if (await post('/event', { id: b.dataset.done, status: 'done' })) toast('Marked done'); }));

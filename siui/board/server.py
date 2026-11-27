@@ -1181,7 +1181,7 @@ class Board:
         disk moves yet: the tracked files of this folder as they are, and the new files the return will take away
         (`fresh`, paths from the repository's top). It shows in `git stash list` and under Stashes in VS Code, and
         "apply" brings it back. It holds this folder alone: what is staged or changed beside the project is not in
-        it. Returns (an error line or '', how it is kept, in words)."""
+        it. Returns (an error line or '', how it is kept, in words; '' when the folder held nothing to keep)."""
         head = self.branch_commit()
         if not head:
             # No commit yet, so git has nothing to hang a stash on: a save point of Siui's own keeps it.
@@ -1203,7 +1203,7 @@ class Board:
             self.drop_index(index)
         _, head_tree, _ = self.git("rev-parse", f"{head}^{{tree}}")
         if worked == head_tree and not fresh:
-            return "", "nothing: the folder held no change"
+            return "", ""
         parents = ["-p", head]
         # A stash entry has a second commit for what was staged. Staging is not kept apart here: it is the branch's.
         code, staged_commit, err = self.git("commit-tree", head_tree, "-p", head, "-m", f"index on {branch}: {subject}")
@@ -1393,7 +1393,7 @@ class Board:
             finally:
                 self.drop_index(index)
             if code != 0:
-                return {"ok": False, "error": f"{(err or out).splitlines()[0] if (err or out) else 'git could not write the files'}; what was there is kept as {kept}"}
+                return {"ok": False, "error": f"{(err or out).splitlines()[0] if (err or out) else 'git could not write the files'}" + (f"; what was there is kept as {kept}" if kept else "")}
             # The person's index goes back to the branch's for this folder, so that everything that now differs from
             # the branch shows as a change, none of it staged.
             if self.branch_commit():
@@ -1407,7 +1407,9 @@ class Board:
             level = str(body.get("level") or "").strip() or target["level"]
             record.setdefault("events", []).append({
                 "id": f"pipe-return-{stamp.replace('T', '-')}", "kind": "pipe", "title": f"Returned to {target['title']}",
-                "text": f"The branch did not move. What was there is kept as {kept}."[:240], "world": world, "level": level, "at": now,
+                "text": (f"The branch did not move. What was there is kept as {kept}." if kept
+                         else "The branch did not move. Nothing in the folder had changed, so there was nothing to keep.")[:240],
+                "world": world, "level": level, "at": now,
                 "status": "done", "doneAt": now, "to": {"world": target["world"], "level": target["level"]},
             })
             # The record and the chat log are the present's, whatever the save point held: they are put back.
@@ -1420,7 +1422,11 @@ class Board:
                         handle.write(text)
                 except OSError:
                     pass
-        self.prompt({"text": f"I returned the project's files to a save point (commit {target['commit'][:7]}) from the board. My branch did not move; what was there before is kept as a git stash entry. Re-read the files you rely on before going on."})
+        # The chat is told what happened in fixed words: the entry's name holds the save point's title, the record's text.
+        how = ("what was there before is kept as a git stash entry" if kept.startswith("the git stash entry")
+               else "what was there before is kept as a save point" if kept
+               else "nothing in the folder had changed since, so there was nothing to keep")
+        self.prompt({"text": f"I returned the project's files to a save point (commit {target['commit'][:7]}) from the board. My branch did not move; {how}. Re-read the files you rely on before going on."})
         return {"ok": True, "keptAs": kept}
 
     def back(self, body):
