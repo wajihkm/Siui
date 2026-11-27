@@ -128,6 +128,11 @@ export async function commitFolder(
   } catch {
     // not there, or not to be read: nothing of it to commit either
   }
+  // The log itself is named only while git could take it. One that git ignores already needs no keeping out, and
+  // git refuses an add that names an ignored file by its path, even to leave it out.
+  if (logPath !== '' && aside.length > 0 && (await git($, root, ['check-ignore', '-q', '--', logPath])).exitCode === 0) {
+    aside = aside.filter(one => !one.startsWith(':(exclude,literal)'))
+  }
   let leftOut: string[] = []
   let add = ['add', '-u', '--', '.', ...aside]
   if (mode === 'all') {

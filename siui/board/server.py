@@ -1012,8 +1012,9 @@ class Board:
 
     def git(self, *args, timeout=60, cwd=None):
         try:
-            out = subprocess.run(["git", *self.git_options(), *args],
-                                 cwd=cwd or self.root, capture_output=True, text=True, timeout=timeout)
+            # In English, whatever the person's language: what git says is read here ("nothing to commit").
+            out = subprocess.run(["git", *self.git_options(), *args], cwd=cwd or self.root, capture_output=True, text=True,
+                                 timeout=timeout, env=dict(os.environ, LANGUAGE="en", LC_MESSAGES="C"))
         except (OSError, subprocess.TimeoutExpired) as error:
             return 1, "", str(error)
         return out.returncode, out.stdout.strip(), out.stderr.strip()
@@ -1035,7 +1036,13 @@ class Board:
         if os.path.isdir(full) or not self.inside(full):
             return []
         log = os.path.relpath(full, cwd).replace(os.sep, "/")
-        return [f":(exclude,literal){log}", ":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", log[:-6]) + "-*.jsonl"]
+        specs = [":(exclude,glob)" + re.sub(r"([*?\[\]\\])", r"\\\1", log[:-6]) + "-*.jsonl"]
+        # The log itself is named only while git could take it. One that git ignores already needs no keeping out,
+        # and git refuses an add that names an ignored file by its path, even to leave it out.
+        code, _, _ = self.git("check-ignore", "-q", "--", log, cwd=cwd)
+        if code != 0:
+            specs.insert(0, f":(exclude,literal){log}")
+        return specs
 
     def git_busy(self):
         """What git is in the middle of, which a commit now would end wrongly; '' when nothing."""

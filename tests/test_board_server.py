@@ -581,6 +581,24 @@ class SavePoints(unittest.TestCase):
         self.assertIn("M project/.claude/chat-log.jsonl", self.git("status", "--short"))
         self.assertIn("?? project/.claude/chat-log-2026-10-01.jsonl", self.git("status", "--short"))
 
+    def test_a_chat_log_that_git_ignores_does_not_stop_a_save_point(self):
+        """The plugin writes an ignore file beside the chat log, and a save point keeps the log out by name as well.
+        git refuses an add that names an ignored file, even to leave it out: the two must not meet. This is how a
+        project stands after its first turn with the mode on, and the first save point made there failed."""
+        self.write("project/.claude/.gitignore", "# Siui: files of this machine, not of the repository\n/chat-log.jsonl\n/chat-log-*.jsonl\nexports/\n")
+        self.write("project/.claude/chat-log.jsonl", '{"user": "my own prompt"}\n')
+        self.write("project/.claude/chat-log-2026-10-01.jsonl", '{"user": "an archive"}\n')
+        for mode in ("all", "tracked"):
+            self.write("project/src/app.py", f"print('{mode}')\n")
+            head = self.git("rev-parse", "HEAD")
+            _, answer, _ = self.board.call("POST", "/checkpoint", {"title": mode, "world": 1, "level": "1-1", "newFiles": mode})
+            self.assertEqual(answer["ok"], True, answer)
+            self.assertNotEqual(self.git("rev-parse", "HEAD"), head, "no commit was made")
+            files = self.committed()
+            self.assertIn("project/src/app.py", files, mode)
+            self.assertFalse([one for one in files if "chat-log" in one], mode)
+        self.assertIn("project/.claude/.gitignore", self.git("ls-files"))
+
     def test_a_folder_with_nothing_tracked_is_no_error_and_a_save_point_is_always_a_commit(self):
         empty = tempfile.mkdtemp(prefix="siui-test-empty-")
         try:
