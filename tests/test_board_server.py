@@ -321,9 +321,11 @@ class BoardServer(unittest.TestCase):
                 accepted, seen = listener.accept()
                 self.assertEqual(server.peer_row(seen, port), (os.getuid(), True), address)
                 self.assertFalse(server.has_hung_up(accepted), address)
-                # Gone, with bytes it sent still unread here: the kernel says so all the same.
+                # Bytes it sent and nobody read yet do not make a caller that waits look gone.
                 caller.sendall(b"x" * 20000)
                 time.sleep(0.05)
+                self.assertFalse(server.has_hung_up(accepted), address)
+                # Gone, with those bytes still unread here: the kernel says so all the same.
                 if family == socket.AF_INET:
                     caller.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                 caller.close()
@@ -342,7 +344,9 @@ class BoardServer(unittest.TestCase):
         secret = [".env", "a/.env", ".env.local", ".env-production", ".envrc", "prod.env", "x.pem", "deploy/server.key", "id_rsa", ".ssh/id_ed25519",
                   "id_rsa_github", "terraform.tfvars", "terraform.tfstate", "terraform.tfstate.backup", "service-account.json", "serviceaccount-prod.json",
                   "client_secret_123.json", "kubeconfig", "dev.kubeconfig", ".htpasswd", ".pgpass", ".npmrc", "credentials.json", "credentials",
-                  "secrets.yaml", "config/secrets.toml", "secret", ".docker/config.json", "a.p12", "x.kdbx"]
+                  "secrets.yaml", "config/secrets.toml", "secret", ".docker/config.json", "a.p12", "x.kdbx", "cert.pfx", "store.jks",
+                  "release.keystore", "putty.ppk", ".netrc", ".pypirc", ".git-credentials", ".dockercfg", "id_dsa", ".ssh/id_ecdsa", ".secrets",
+                  ".credentials.json", "gcp-service-account.json", "terraform.tfvars.json"]
         shared = [".env.example", ".env.sample", "a/.env.template", "example.env", "config/sample.env", "id_rsa.pub", ".ssh/id_ed25519.pub", "src/app.py",
                   "README.md", "environment.ts", "keyboard.py", "docs/secrets-management.md", "src/env.py", "package.json", "tokens.css", "secretary.txt",
                   "credentials-form.tsx", "credentials.ts", "secrets.py", "src/secrets.rs", ".envoy.yaml", "service_account_test.go",
@@ -530,7 +534,9 @@ class SavePoints(unittest.TestCase):
         self.git("add", "outside/notes.txt")
 
     def tearDown(self):
+        left = [one for one in os.listdir(self.board.run) if one.startswith("index-")]
         self.board.close()
+        self.assertEqual(left, [], "a scratch index was left in the run folder")
 
     def files_of(self, commit):
         """The files a save point holds that differ from the commit it was taken on."""
@@ -737,6 +743,10 @@ class SavePoints(unittest.TestCase):
                 with open(os.path.join(board.root, "README.md"), encoding="utf-8") as handle:
                     self.assertEqual(handle.read(), "# demo\n")
                 self.assertFalse(os.path.exists(os.path.join(board.root, "later.txt")))
+                kept = back["keptAs"].split()[-1]
+                shown = lambda path: subprocess.run(["git", "show", f"{kept}:{path}"], cwd=empty, capture_output=True, text=True).stdout  # noqa: E731
+                self.assertEqual(shown("project/README.md"), "# changed\n", "what was there before the return is kept nowhere")
+                self.assertEqual(shown("project/later.txt"), "later\n")
             finally:
                 board.close()
         finally:
@@ -957,6 +967,216 @@ class SavePoints(unittest.TestCase):
                 board.stop()
         finally:
             shutil.rmtree(holder, ignore_errors=True)
+
+    def test_a_return_never_empties_a_folder_standing_where_a_file_was(self):
+        """Writing a file where a folder stands takes the whole folder away, whatever git knows of what is in it.
+        With anything in it that no stash entry keeps, the return must wait."""
+        self.git("stash", "-q", "-u")
+        self.write("project/a", "a file\n")
+        self.git("add", "project/a")
+        self.git("commit", "-q", "-m", "a is a file")
+        saved = self.save("a is a file", newFiles="all")
+        os.remove(os.path.join(self.repo, "project", "a"))
+        self.write(".gitignore", "*.log\n")
+        self.write("project/a/keep.log", "ignored, and mine\n")
+        self.write("project/a/.env", "TOKEN=mine\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], False, back)
+        self.assertIn("write over", back["error"])
+        self.assertEqual(self.read("project/a/keep.log"), "ignored, and mine\n")
+        self.assertEqual(self.read("project/a/.env"), "TOKEN=mine\n")
+        # With only files the stash entry keeps in it, the folder gives way and the file is back.
+        os.remove(os.path.join(self.repo, "project", "a", "keep.log"))
+        os.remove(os.path.join(self.repo, "project", "a", ".env"))
+        self.write("project/a/new.txt", "new\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertEqual(self.read("project/a"), "a file\n")
+        self.assertIn("project/a/new.txt", self.git("ls-tree", "-r", "--name-only", "stash@{0}^3").split("\n"))
+
+    def test_a_folder_of_tracked_files_gives_way_to_the_save_points_file(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/thing", "a file\n")
+        self.git("add", "project/thing")
+        self.git("commit", "-q", "-m", "thing is a file")
+        saved = self.save("thing is a file", newFiles="all")
+        self.git("rm", "-q", "project/thing")
+        self.write("project/thing/x.py", "x\n")
+        self.git("add", "project/thing/x.py")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertEqual(self.read("project/thing"), "a file\n")
+        self.assertEqual(self.git("show", "stash@{0}:project/thing/x.py"), "x")
+
+    def test_what_was_taken_out_of_the_index_is_not_in_a_save_point(self):
+        """`git rm` and the old name of a `git mv` are gone from the folder as the person sees it."""
+        self.git("stash", "-q", "-u")
+        self.write("project/old.py", "old\n")
+        self.write("project/gone.py", "gone\n")
+        self.git("add", "project")
+        self.git("commit", "-q", "-m", "two more files")
+        self.git("mv", "project/old.py", "project/renamed.py")
+        self.git("rm", "-q", "project/gone.py")
+        saved = self.save("after a move", newFiles="tracked")
+        held = self.git("ls-tree", "-r", "--name-only", saved["commit"]).split("\n")
+        self.assertIn("project/renamed.py", held)
+        self.assertNotIn("project/old.py", held)
+        self.assertNotIn("project/gone.py", held)
+        # And a return keeps them gone, and keeps what was staged apart from what was edited after.
+        self.write("project/src/app.py", "print('staged')\n")
+        self.git("add", "project/src/app.py")
+        self.write("project/src/app.py", "print('edited after')\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertFalse(self.there("project/old.py"))
+        self.assertFalse(self.there("project/gone.py"))
+        self.assertEqual(self.git("show", "stash@{0}^2:project/src/app.py"), "print('staged')")
+        self.assertEqual(self.git("show", "stash@{0}:project/src/app.py"), "print('edited after')")
+        self.assertNotIn("project/gone.py", self.git("ls-tree", "-r", "--name-only", "stash@{0}").split("\n"))
+        # Nothing of the folder is staged after a return: all of it shows as plain changes.
+        staged = [line for line in self.git("status", "--porcelain", strip=False).split("\n") if line[:1] not in (" ", "?", "") and line[3:].startswith("project/")]
+        self.assertEqual(staged, [])
+
+    def test_a_save_point_of_tracked_files_leaves_the_other_files_on_a_return(self):
+        """A save point that took no new file knows nothing of them: a return to it must not take them away."""
+        saved = self.save("tracked only", newFiles="tracked")
+        self.assertIn("Siui: tracked files only", self.git("log", "-1", "--format=%B", saved["commit"]))
+        self.write("project/src/app.py", "print(3)\n")
+        self.write("project/src/later.py", "later\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertEqual(self.read("project/src/app.py"), "print(2)\n")
+        self.assertEqual(self.read("project/src/new.py"), "new\n", "a file older than the save point was taken away")
+        self.assertEqual(self.read("project/src/later.py"), "later\n")
+        self.assertEqual(self.git("show", "stash@{0}:project/src/app.py"), "print(3)")
+
+    def test_a_file_a_sparse_checkout_leaves_off_the_disk(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/src/big.bin", "big\n")
+        self.git("add", "project/src/big.bin")
+        self.git("commit", "-q", "-m", "a big file")
+        self.git("update-index", "--skip-worktree", "project/src/big.bin")
+        os.remove(os.path.join(self.repo, "project", "src", "big.bin"))
+        saved = self.save("sparse", newFiles="all")
+        self.assertEqual(self.git("show", f"{saved['commit']}:project/src/big.bin"), "big", "a file left off the disk on purpose dropped out of the save point")
+        self.write("project/src/app.py", "print(3)\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertFalse(self.there("project/src/big.bin"), "the return wrote a file the checkout leaves off the disk")
+        self.assertEqual(self.git("show", "stash@{0}:project/src/big.bin"), "big")
+
+    def test_a_repository_of_its_own_inside_the_folder_is_left_alone(self):
+        os.makedirs(os.path.join(self.repo, "project", "vendor"))
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=os.path.join(self.repo, "project", "vendor"), check=True, capture_output=True)
+        self.write("project/vendor/lib.py", "theirs\n")
+        saved = self.save("beside a repository", newFiles="all")
+        self.assertEqual(saved["ok"], True, saved)
+        self.assertNotIn("vendor", self.git("ls-tree", "-r", "--name-only", saved["commit"]))
+        self.write("project/src/app.py", "print(3)\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        self.assertEqual(self.read("project/vendor/lib.py"), "theirs\n")
+        self.assertTrue(self.there("project/vendor/.git"))
+
+    def test_names_that_are_odd_or_not_utf8(self):
+        if os.name == "nt":
+            self.skipTest("such names are not made on Windows")
+        odd = os.path.join(os.fsencode(self.repo), b"project", b"src", b"caf\xe9 \xff.txt")
+        with open(odd, "wb") as handle:
+            handle.write(b"bytes\n")
+        self.write("project/src/ lead and trail .txt", "spaces\n")
+        self.write("project/src/-dash.txt", "dash\n")
+        saved = self.save("odd names", newFiles="all")
+        self.assertEqual(saved["ok"], True, saved)
+        held = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", saved["commit"]], cwd=self.repo, capture_output=True).stdout.split(b"\0")
+        self.assertIn(b"project/src/caf\xe9 \xff.txt", held)
+        self.assertIn(b"project/src/ lead and trail .txt", held)
+        os.remove(odd)
+        self.write("project/src/ lead and trail .txt", "changed\n")
+        back = self.back(saved["id"])
+        self.assertEqual(back["ok"], True, back)
+        with open(odd, "rb") as handle:
+            self.assertEqual(handle.read(), b"bytes\n")
+        self.assertEqual(self.read("project/src/ lead and trail .txt"), "spaces\n")
+
+    def test_a_project_that_is_the_whole_repository(self):
+        """Names from the repository's top then begin with the file's own name: a space in front must stay."""
+        whole = tempfile.mkdtemp(prefix="siui-test-whole-")
+        try:
+            run = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args], cwd=whole, check=True, capture_output=True, text=True).stdout  # noqa: E731
+            run("init", "-q", "-b", "main")
+            os.makedirs(os.path.join(whole, ".claude"))
+            with open(os.path.join(whole, ".claude", "decisions.json"), "w", encoding="utf-8") as handle:
+                json.dump(record(), handle)
+            with open(os.path.join(whole, " lead.txt"), "w", encoding="utf-8") as handle:
+                handle.write("one\n")
+            run("add", "-A")
+            run("commit", "-q", "-m", "start")
+            board = Running(made=whole)
+            try:
+                with open(os.path.join(whole, " lead.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("two\n")
+                _, saved, _ = board.call("POST", "/checkpoint", {"title": "whole", "world": 1, "level": "1-1", "newFiles": "tracked"})
+                self.assertEqual(saved["ok"], True, saved)
+                self.assertEqual(run("show", f"{saved['commit']}: lead.txt"), "two\n")
+                with open(os.path.join(whole, " lead.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("three\n")
+                _, back, _ = board.call("POST", "/revert", {"id": saved["id"], "world": 1, "level": "1-1"})
+                self.assertEqual(back["ok"], True, back)
+                with open(os.path.join(whole, " lead.txt"), encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "two\n")
+                self.assertEqual([one for one in os.listdir(board.run) if one.startswith("index-")], [])
+            finally:
+                board.stop()
+                shutil.rmtree(board.run, ignore_errors=True)
+        finally:
+            shutil.rmtree(whole, ignore_errors=True)
+
+    def test_a_return_before_any_commit_keeps_new_files_whatever_their_number(self):
+        empty = tempfile.mkdtemp(prefix="siui-test-empty-")
+        try:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=empty, check=True, capture_output=True)
+            board = Running(inside=empty)
+            try:
+                def put(name, text):
+                    with open(os.path.join(board.root, name), "w", encoding="utf-8") as handle:
+                        handle.write(text)
+
+                put("a.txt", "one\n")
+                _, saved, _ = board.call("POST", "/checkpoint", {"title": "first", "world": 1, "level": "1-1", "newFiles": "all"})
+                self.assertEqual(saved["ok"], True, saved)
+                put("a.txt", "two\n")
+                put("notes.txt", "notes\n")
+                os.makedirs(os.path.join(board.root, "keys"))
+                for i in range(41):
+                    put(f"keys/key-{i}.pem", "k\n")
+                _, back, _ = board.call("POST", "/revert", {"id": saved["id"], "world": 1, "level": "1-1"})
+                self.assertEqual(back["ok"], True, back)
+                kept = back["keptAs"].split()[-1]
+                shown = lambda path: subprocess.run(["git", "show", f"{kept}:{path}"], cwd=empty, capture_output=True, text=True).stdout  # noqa: E731
+                self.assertEqual(shown("project/a.txt"), "two\n", "an edited file was written over and kept nowhere")
+                self.assertEqual(shown("project/notes.txt"), "notes\n", "a new file was taken away and kept nowhere")
+                with open(os.path.join(board.root, "a.txt"), encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "one\n")
+                self.assertEqual(len(os.listdir(os.path.join(board.root, "keys"))), 41)
+            finally:
+                board.close()
+        finally:
+            shutil.rmtree(empty, ignore_errors=True)
+
+    def test_the_chat_log_of_the_present_survives_a_return_to_a_commit_that_held_one(self):
+        self.git("stash", "-q", "-u")
+        self.write("project/.claude/chat-log.jsonl", '{"user": "an old prompt"}\n')
+        self.git("add", "-f", "project/.claude/chat-log.jsonl")
+        self.git("commit", "-q", "-m", "an old commit that held the chat log")
+        held = self.git("rev-parse", "HEAD")
+        self.git("rm", "-q", "--cached", "project/.claude/chat-log.jsonl")
+        self.git("commit", "-q", "-m", "the log leaves git")
+        self.write("project/.claude/chat-log.jsonl", '{"user": "an old prompt"}\n{"user": "today"}\n')
+        self.plant(held)
+        back = self.back("checkpoint-planted")
+        self.assertEqual(back["ok"], True, back)
+        self.assertIn("today", self.read("project/.claude/chat-log.jsonl"), "the chat log was written over by the save point's")
 
     def test_no_return_in_the_middle_of_a_merge(self):
         self.git("stash", "-q", "-u")

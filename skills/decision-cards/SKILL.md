@@ -53,11 +53,12 @@ and applied. Nothing is generated before the boss.
     pipe. A card or a note that carries one of these says so (`mark`) and it lands by
     itself; mark it done when it is fixed, built, cleared, passed or taken. In the record
     these are `events`.
-13. Before a change that is hard to undo, and after a boss is applied, save a
-    **checkpoint**: a snapshot of the project's folder, recorded on the stage as a save
-    point the user can return to. It is kept aside: the user's branch and their list of
-    changes stay as they are. Returning brings the folder's files back, leaves the branch
-    alone, and keeps what was there as a git stash entry first.
+13. Before a change that is hard to undo, save a **checkpoint**: a snapshot of the
+    project's folder, recorded on the stage as a save point the user can return to. It is
+    kept aside: the user's branch and their list of changes stay as they are. Returning
+    brings the folder's files back, leaves the branch alone, and keeps what was there as
+    a git stash entry first. After a boss is applied the world's work is saved and
+    committed; a card mechanism does that by itself when the world is closed.
 14. A stage may **fork**: when two answers both deserve a try, a card offers "Fork here";
     the stage splits into roads a and b, each a git branch from a checkpoint, and the
     remaining cards are asked on the road on disk as level `<level>a` or `<level>b`. A

@@ -24,11 +24,11 @@ export type SaveMode = 'all' | 'tracked'
 const SECRET_LIKE = new RegExp(
   [
     '(^|/)\\.env($|[._-])|(^|/)\\.envrc$|\\.env$',
-    '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$',
+    '\\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|tfvars|tfstate|kubeconfig)$|\\.tfstate\\.backup$|\\.tfvars\\.json$',
     '(^|/)id_(rsa|dsa|ecdsa|ed25519)[^/]*$',
     '(^|/)\\.(npmrc|pypirc|netrc|git-credentials|htpasswd|pgpass|dockercfg)$|(^|/)\\.docker/config\\.json$|(^|/)kubeconfig$',
-    '(^|/)(credentials?|secrets?)(\\.(json|ya?ml|toml|ini|env|txt|xml|properties|cfg|conf|csv))?$',
-    '(^|/)client[-_]secret[^/]*\\.(json|ya?ml|p12|pem|key|txt)$|(^|/)service[-_]?account[^/]*\\.(json|p12|pem|key)$',
+    '(^|/)\\.?(credentials?|secrets?)(\\.(json|ya?ml|toml|ini|env|txt|xml|properties|cfg|conf|csv))?$',
+    '(^|/)client[-_]secret[^/]*\\.(json|ya?ml|p12|pem|key|txt)$|(^|/)[^/]*service[-_]?account[^/]*\\.(json|p12|pem|key)$',
   ].join('|'),
   'i',
 )
@@ -68,7 +68,8 @@ export async function git($: EngineInterface, root: string, args: readonly strin
     const ran = await $.process.run(['git', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...identity, ...args], {
       cwd: root,
       timeoutMs: 60_000,
-      // In English, whatever the person's language: what git says is read here ("nothing to commit").
+      // In English, whatever the person's language: what git says is read here ("nothing to commit"). The engine
+      // sets these over the host's own environment (ProcessRunInit.env), so PATH and HOME stay.
       env: { LANGUAGE: 'en', LC_MESSAGES: 'C' },
     })
 

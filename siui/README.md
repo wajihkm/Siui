@@ -378,12 +378,15 @@ care for new files and secrets.
 
 "Return here" on the board brings the folder's files back to a save point. Your branch
 stays where it is: the files become what they were, files made since leave the folder,
-and whatever then differs from the branch shows as changes. What was there is kept
-first as a git stash entry, "Siui: before returning to …", which git and VS Code list:
-to get it back, discard the changes and apply it. The record and the chat log are the
-present's and are put back. A file no save point takes is never touched; when the save
-point holds something at such a file's path, the return waits until you move the file
-away. A save point made before this, a commit on your branch, returns the same way.
+and whatever then differs from the branch shows as changes, none of them staged. A save
+point that took tracked files only leaves the folder's other files where they are. What
+was there is kept first as a git stash entry, "Siui: before returning to …", which git
+and VS Code list. To get it back, undo the changes to the files the entry names, then
+apply it; leave `.claude/decisions.json` alone, since the record is the present's, is
+put back after every return and is not in the entry. A file no save point takes is
+never touched: when the save point holds something at such a file's path, or a file
+where a folder with such files now stands, the return waits until you move them away. A
+save point made before this, a commit on your branch, returns the same way.
 
 ## Developing
 
