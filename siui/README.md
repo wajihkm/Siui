@@ -361,20 +361,32 @@ cost so far, how full the context window is, and each rate-limit window with its
   level `<level>a`; `"road"` switches the disk to road `a` or `b`; `"merge"` keeps `a`,
   `b` or `both`.
 
-A checkpoint is a save point: a commit of the project's folder on your current branch,
-made by the tool, by `/siui checkpoint [title]`, by the board's "Save point" button, or by
-`done` after a boss is applied; it commits under your own git identity. It takes the
-files git tracks. New files are added only after you agreed, once per project: the
-question lists them, and the answer is kept in the run folder, outside the project. A
-file whose name looks like a secret (`.env`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`,
-`credentials.json` and the like) is never added; `git add` it yourself when it belongs.
-In a larger repository the other folders, and what you staged there, are left alone, and
-in the middle of a merge or a rebase no save point is made. The chat log is never part of
-one. "Return here" on the board commits and tags what is there now, all of the
-repository and new files too (`checkpoints/before-<time>`, so nothing is lost), resets
-the tree to the save point, puts the record and the chat log back, and tells the chat.
-It waits when the save point would write over a file git does not hold now, until you
-move that file away.
+A checkpoint is a save point: a snapshot of the project's folder as it is on disk, made
+by the tool, by `/siui checkpoint [title]` or by the board's "Save point" button. It is
+kept aside, under a git ref of Siui's own (`refs/siui/save-points/`): your branch does
+not move, nothing is staged or unstaged, and the list of changes in your editor stays as
+it is. It takes the files git tracks. New files are taken only after you agreed, once
+per project: the question lists them, and the answer is kept in the run folder, outside
+the project. A file whose name looks like a secret (`.env`, `*.pem`, `*.key`, `id_rsa`,
+`.npmrc`, `credentials.json` and the like) is never taken, and neither is the chat log.
+In a larger repository the other folders are left alone, and in the middle of a merge or
+a rebase no save point is made.
+
+The end of a world is the one save point that commits: `done`, after a boss is applied,
+commits the project's folder to your branch under your own git identity, with the same
+care for new files and secrets.
+
+"Return here" on the board brings the folder's files back to a save point. Your branch
+stays where it is: the files become what they were, files made since leave the folder,
+and whatever then differs from the branch shows as changes, none of them staged. A save
+point that took tracked files only leaves the folder's other files where they are. What
+was there is kept first as a git stash entry, "Siui: before returning to …", which git
+and VS Code list. To get it back, undo the changes to the files the entry names, then
+apply it; leave `.claude/decisions.json` alone, since the record is the present's, is
+put back after every return and is not in the entry. A file no save point takes is
+never touched: when the save point holds something at such a file's path, or a file
+where a folder with such files now stands, the return waits until you move them away. A
+save point made before this, a commit on your branch, returns the same way.
 
 ## Developing
 

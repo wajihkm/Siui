@@ -12,6 +12,13 @@ done here the right way on every platform, Windows included.
                                               opened with it in its address trades it for the board's key
     launch.py open <run> <port>               opens the board in the person's browser with a fresh pass; exit 1
                                               when no browser could be opened (the pass is then removed)
+    launch.py save <root> <run> <chat> <mode> <how> <title>
+                                              takes a save point of the project and prints one line of JSON: the
+                                              commit, the branch and the files left out, or an error. <how> is
+                                              "aside" (a snapshot under a ref of Siui's own; the branch, the index
+                                              and the list of changes stay as they are) or "commit" (a commit of
+                                              the folder on the branch, as the end of a world makes); <mode> is
+                                              "all" or "tracked", what the person chose for new files
     launch.py move <from> <to>                renames one file over another in one step
     launch.py remove <path>...                removes files; a missing one is fine
 
@@ -200,6 +207,32 @@ def open_board(run, port):
     return 0
 
 
+def save(root, run, chat, mode, how, title):
+    """Takes a save point with the server's own code, so the plugin and the board keep one way of doing it."""
+    if mode not in ("all", "tracked") or how not in ("aside", "commit") or folder(run) != 0:
+        print(json.dumps({"error": "the save point could not be started"}))
+        return 0
+    import argparse
+    sys.path.insert(0, HERE)  # the plugin's own folder: this program runs isolated, without it on the path
+    import server
+    board = server.Board(argparse.Namespace(root=root, run=run, record=".claude/decisions.json", chat=chat, port=0, ipc=""), serving=False)
+    title = " ".join(str(title).split())[:60] or "Checkpoint"
+    if not board.has_git():
+        made = {"error": "not a git repository"}
+    elif how == "aside":
+        error, sha, left_out = board.snapshot(f"Save point: {title}", mode)
+        made = {"error": error} if error else {"commit": sha, "leftOut": left_out[:6]}
+    else:
+        error, left_out = board.commit_folder(f"Checkpoint: {title}", mode)
+        sha = "" if error else board.branch_commit()
+        made = {"error": error or "nothing is committed in this repository yet, so there is no commit to save as"} if error or not sha else {"commit": sha, "leftOut": left_out[:6]}
+    if "commit" in made:
+        _, branch, _ = board.git("rev-parse", "--abbrev-ref", "HEAD")
+        made["branch"] = branch or "HEAD"
+    print(json.dumps(made))
+    return 0
+
+
 def move(source, target):
     try:
         os.replace(source, target)
@@ -230,6 +263,8 @@ def main():
         return make_pass(args[1])
     if verb == "open" and len(args) == 3:
         return open_board(args[1], args[2])
+    if verb == "save" and len(args) == 7:
+        return save(*args[1:])
     if verb == "move" and len(args) == 3:
         return move(args[1], args[2])
     if verb == "remove":

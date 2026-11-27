@@ -706,7 +706,7 @@
     if (data.ok !== true) { toast(data.error || 'failed'); return null; }
     return data;
   }
-  /** One save point flow for every button: a name, then a commit of the whole project on the given stage. */
+  /** One save point flow for every button: a name, then a snapshot of the project's folder, kept aside from the branch, on the given stage. */
   async function savePoint(world, level, btn) {
     const title = await ask('A name for this save point:', { ok: 'Save', value: `Checkpoint ${new Date().toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}` });
     if (title === null || !title.trim()) return;
@@ -716,7 +716,7 @@
     if (data && data.ask === 'newFiles') {
       // A save point is a commit on the person's branch: files git does not know yet are added only when they agree, once.
       const files = Array.isArray(data.files) ? data.files.map(String) : [], count = Number(data.count) || files.length;
-      const choice = await ask(`Save points commit this folder to git, on the current branch.\n\n${count} new file${count === 1 ? '' : 's'} would be added: ${files.join(', ')}${count > files.length ? ` and ${count - files.length} more` : ''}.\n\nFiles that look like secrets (.env, keys) are never added.`, { ok: 'Add new files', alt: 'Tracked files only' });
+      const choice = await ask(`A save point keeps this folder as it is now, aside from your branch.\n\n${count} new file${count === 1 ? '' : 's'} would be kept in it: ${files.join(', ')}${count > files.length ? ` and ${count - files.length} more` : ''}.\n\nFiles that look like secrets (.env, keys) are never taken.`, { ok: 'Add new files', alt: 'Tracked files only' });
       data = choice === false ? null : await post('/checkpoint', { ...body, newFiles: choice === 'alt' ? 'tracked' : 'all' });
     }
     if (btn) btn.disabled = false;
@@ -884,7 +884,7 @@
     challenge: { name: 'Problem', game: 'challenge', done: 'cleared', doneVerb: 'Cleared', hint: 'a hard problem to clear', tone: '#c2410c' },
     check: { name: 'Check', game: 'checkbox', done: 'passed', doneVerb: 'Passed', hint: 'a check or a test you asked for', tone: '#0d9488' },
     pipe: { name: 'Jump', game: 'warp pipe', done: 'taken', doneVerb: 'Taken', hint: 'the work moved to another stage or world', tone: '#15803d' },
-    checkpoint: { name: 'Save point', game: 'checkpoint', done: 'returned to', doneVerb: 'Returned', hint: 'a commit of the whole project to return to', tone: 'var(--accent)' },
+    checkpoint: { name: 'Save point', game: 'checkpoint', done: 'returned to', doneVerb: 'Returned', hint: 'a snapshot of the project to return to; your branch and changes stay as they are', tone: 'var(--accent)' },
   };
   const kindWords = k => `${KINDS[k].name} · in the game: ${KINDS[k].game} · ${KINDS[k].hint}`;
 
@@ -1171,11 +1171,11 @@
     }));
     el.querySelectorAll('[data-return]').forEach(b => b.addEventListener('click', async () => {
       const f = b.closest('.fold, section').querySelector('form.addmark');
-      if (!(await ask(`Return the project to the checkpoint "${b.dataset.title}"?\n\nEverything there now is committed and kept under a git tag first, so nothing is lost; the files then go back to the save point.`, { ok: 'Return' }))) return;
+      if (!(await ask(`Return the project's files to the save point "${b.dataset.title}"?\n\nWhat is there now is kept first as a git stash entry, so nothing is lost. Files made since leave the folder. Your branch does not move.`, { ok: 'Return' }))) return;
       b.disabled = true;
       const data = await post('/revert', { id: b.dataset.return, world: Number(f.dataset.world), level: f.dataset.level });
       b.disabled = false;
-      if (data) toast(`Returned; the state before is kept as ${data.keptAs}`);
+      if (data) toast(data.keptAs ? `Returned; what was there is kept as ${data.keptAs}` : 'Returned; nothing had changed since, so there was nothing to keep');
     }));
     el.querySelectorAll('[data-move-event]').forEach(b => b.addEventListener('click', () => moveThing({ kind: 'event', id: b.dataset.moveEvent }, Number(b.dataset.world), b.dataset.level)));
     el.querySelectorAll('[data-done]').forEach(b => b.addEventListener('click', async () => { if (await post('/event', { id: b.dataset.done, status: 'done' })) toast('Marked done'); }));

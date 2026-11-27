@@ -31,7 +31,7 @@ import {
 } from './board'
 import { drawCard } from './card'
 import { appendChat } from './chat'
-import { forkRoads, keepOutOfCommits, looksSecret, mergeRoads, newFiles, saveCheckpoint, switchRoad } from './checkpoint'
+import { forkRoads, keepOutOfCommits, looksSecret, mergeRoads, newFiles, savePoint, switchRoad } from './checkpoint'
 import type { RunFork, SaveMode } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
@@ -98,9 +98,9 @@ function opensWorld(record: GameRecord, current: GameCard): boolean {
 }
 
 /**
- * How save points treat new files in this project. A save point is a commit
- * on the person's branch, so files git does not know yet are added only after
- * they agreed, once: the question lists them, and the answer is kept in the
+ * How save points treat new files in this project. A save point holds the
+ * person's files, and the end of a world commits them to their branch, so
+ * files git does not know yet are taken only after they agreed, once: the question lists them, and the answer is kept in the
  * run folder (theirs alone, outside the project, so a cloned repository
  * cannot answer for them), where the board's server reads it too. With
  * nothing new there is nothing to ask. Undefined when they left the question
@@ -118,7 +118,7 @@ async function saveModeFor($: EngineInterface, root: string): Promise<SaveMode |
   const fresh = (await newFiles($, root)).filter(one => !looksSecret(one))
   if (fresh.length === 0) return 'all'
   const shown = `${fresh.slice(0, 6).join(', ')}${fresh.length > 6 ? ` and ${fresh.length - 6} more` : ''}`
-  const question = `Save points commit this folder to git, on the current branch. ${fresh.length} new file${fresh.length === 1 ? '' : 's'} would be added: ${shown}. Files that look like secrets (.env, keys) are never added. Add new files to save points?`
+  const question = `A save point keeps this folder as it is, aside from your branch; the end of a world also commits it. ${fresh.length} new file${fresh.length === 1 ? '' : 's'} would be taken: ${shown}. Files that look like secrets (.env, keys) are never taken. Take new files in save points?`
   ownAsk = true
   try {
     const answer = await $.ui.ask(question, { options: ['Add new files', 'Tracked files only'], header: 'Save points' })
@@ -522,7 +522,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     const title = rest.join(' ').trim() || `Checkpoint ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`
     const mode = await saveModeFor($, root)
     if (mode === undefined) return { text: `No checkpoint: ${NOT_ASKED}.` }
-    const saved = await saveCheckpoint($, root, title, mode)
+    const saved = await savePoint($, root, (await boardPaths($, root)).run, config.chatLog, title, mode, 'aside')
     if ('error' in saved) return { text: `No checkpoint: ${saved.error}.` }
     const record = await readRecord($, root, config.record)
     const run = openRun(record) ?? lastWorldRun(record)
@@ -546,7 +546,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     await writeRecord($, root, record, config.record)
     await update($, history, list => [...list].slice(-200))
 
-    return { text: `Checkpoint saved: ${title} (${saved.commit.slice(0, 7)} on ${saved.branch}). Return to it from the board.${leftOutLine(saved.leftOut)}` }
+    return { text: `Save point taken: ${title} (${saved.commit.slice(0, 7)}). Your branch and your changes are as they were; return to it from the board.${leftOutLine(saved.leftOut)}` }
   }
 
   if (word === 'pane') {
@@ -970,7 +970,7 @@ export const register: Register = on => {
     if (kind === 'checkpoint' && !existing) {
       const mode = await saveModeFor($, root)
       if (mode === undefined) return { result: JSON.stringify({ recorded: false, error: `no save point: ${NOT_ASKED}` }) }
-      const saved = await saveCheckpoint($, root, title, mode)
+      const saved = await savePoint($, root, (await boardPaths($, root)).run, config.chatLog, title, mode, 'aside')
       if ('error' in saved) return { result: JSON.stringify({ recorded: false, error: saved.error }) }
       event.commit = saved.commit
       event.branch = saved.branch
@@ -1310,7 +1310,11 @@ export const register: Register = on => {
     // The applied world is a save point: a checkpoint at the commit the model just made.
     // No answer about new files, or git in the middle of a merge: the world is closed all the same, without a save point.
     const mode = await saveModeFor($, root)
-    const saved = mode === undefined ? { error: NOT_ASKED } : await saveCheckpoint($, root, `World ${run2.world} applied`, mode)
+    // The end of a world is the one save point that commits to the branch: the person chose to keep that.
+    const saved =
+      mode === undefined
+        ? { error: NOT_ASKED }
+        : await savePoint($, root, (await boardPaths($, root)).run, config.chatLog, `World ${run2.world} applied`, mode, 'commit')
     if ('error' in saved) $.ui.toast(`No save point for world ${run2.world}: ${saved.error}`)
     if (!('error' in saved)) {
       if (saved.leftOut.length > 0) $.ui.toast(`Save point made.${leftOutLine(saved.leftOut)}`)
