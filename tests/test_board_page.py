@@ -400,6 +400,11 @@ class HostilePage(unittest.TestCase):
         self.check(notes, board, drawn=True)
         self.assertEqual(notes["pageError"], "")
         self.assertEqual(sorted(board.exports), ["html", "md", "svg"])
+        # A pack in a place the plugin knows is named with its path, the only way the assistant can find one the
+        # plugin ships; a pack in a folder the configuration names is named by its slug alone.
+        asked = [str(body.get("text")) for path, body in board.posts if path == "/prompt"]
+        self.assertTrue([one for one in asked if "Start the pack release as world 5: read the pack at /tmp/plugin/packs/release.md," in one], asked)
+        self.assertTrue([one for one in asked if "Start the pack world-4-page as world 4: read the pack, read" in one], asked)
         for kind in ("html", "md"):
             self.assertIn("Project name", board.exports[kind])
             self.assertIn("A status page", board.exports[kind])
