@@ -7,7 +7,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GameSource } from '../types'
-import { baseName as lastPart, fileUrl, isAbsolute, join, normalise } from './paths'
+import { baseName as lastPart, fileUrl, isAbsolute, isNetwork, join, normalise } from './paths'
 
 /** Files every session is given, so they count as read without a Read call. */
 const ALWAYS_READ = new Set(['CLAUDE.md', 'AGENTS.md'])
@@ -66,8 +66,10 @@ export async function resolveSources(
 
   for (const source of sources) {
     const absolute = absolutePath(source.path, root, home)
-    const exists = await $.fs.exists(absolute)
-    const one: GameSource = { ...source, href: hrefOf(absolute) }
+    // A path on another machine is not even asked about: on Windows that alone signs in there. It shows as missing.
+    const isRemote = isNetwork(source.path) || isNetwork(absolute)
+    const exists = !isRemote && (await $.fs.exists(absolute))
+    const one: GameSource = isRemote ? { ...source } : { ...source, href: hrefOf(absolute) }
     if (!exists) one.isMissing = true
     if (exists) {
       try {

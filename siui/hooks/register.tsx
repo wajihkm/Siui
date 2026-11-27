@@ -21,6 +21,7 @@ import {
   ensureServer,
   isAutoOn,
   isBoardLive,
+  keyLink,
   openBrowser,
   publishCard,
   setAuto,
@@ -30,8 +31,8 @@ import {
 } from './board'
 import { drawCard } from './card'
 import { appendChat } from './chat'
-import { forkRoads, mergeRoads, saveCheckpoint, switchRoad } from './checkpoint'
-import type { RunFork } from './checkpoint'
+import { forkRoads, keepOutOfCommits, looksSecret, mergeRoads, newFiles, saveCheckpoint, switchRoad } from './checkpoint'
+import type { RunFork, SaveMode } from './checkpoint'
 import { MARKS, kindOf } from './marks'
 import { defaultConfig, readConfig } from './config'
 import { setWords } from './words'
@@ -40,7 +41,7 @@ import { claimPending, resetCost, setCostTarget, settleCost } from './cost'
 import type { GameConfig } from './config'
 import { CARD_DESCRIPTION, CARD_SCHEMA, cut, headerOf, isLevel, normaliseCard, statusLine } from './input'
 import { mapSvg } from './map'
-import { findPack, readPlan } from './pack'
+import { findPack, packCandidates, readPlan } from './pack'
 import {
   ASK_REPLACED,
   DONE_DESCRIPTION,
@@ -96,6 +97,49 @@ function opensWorld(record: GameRecord, current: GameCard): boolean {
   return current.pack !== undefined && current.world > 0 && !hasWorld(record, current.world)
 }
 
+/**
+ * How save points treat new files in this project. A save point is a commit
+ * on the person's branch, so files git does not know yet are added only after
+ * they agreed, once: the question lists them, and the answer is kept in the
+ * run folder (theirs alone, outside the project, so a cloned repository
+ * cannot answer for them), where the board's server reads it too. With
+ * nothing new there is nothing to ask. Undefined when they left the question
+ * or nobody is there to ask: no save point then.
+ */
+async function saveModeFor($: EngineInterface, root: string): Promise<SaveMode | undefined> {
+  const paths = await boardPaths($, root)
+  try {
+    const kept = (JSON.parse(await $.fs.read(paths.saveMode)) as { mode?: unknown }).mode
+    if (kept === 'all' || kept === 'tracked') return kept
+  } catch {
+    // not chosen yet
+  }
+  // Files that look like secrets are never added, so they are nothing to ask about.
+  const fresh = (await newFiles($, root)).filter(one => !looksSecret(one))
+  if (fresh.length === 0) return 'all'
+  const shown = `${fresh.slice(0, 6).join(', ')}${fresh.length > 6 ? ` and ${fresh.length - 6} more` : ''}`
+  const question = `Save points commit this folder to git, on the current branch. ${fresh.length} new file${fresh.length === 1 ? '' : 's'} would be added: ${shown}. Files that look like secrets (.env, keys) are never added. Add new files to save points?`
+  ownAsk = true
+  try {
+    const answer = await $.ui.ask(question, { options: ['Add new files', 'Tracked files only'], header: 'Save points' })
+    const mode: SaveMode | undefined = answer === 'Add new files' ? 'all' : answer === 'Tracked files only' ? 'tracked' : undefined
+    if (mode !== undefined && (await launch($, ['folder', paths.run])).exitCode === 0) {
+      await $.fs.write(paths.saveMode, `${JSON.stringify({ mode, at: Date.now() })}\n`)
+    }
+
+    return mode
+  } catch {
+    return undefined
+  } finally {
+    ownAsk = false
+  }
+}
+const NOT_ASKED = 'the question about new files was left unanswered'
+/** A line for the files a save point stepped around, or ''. */
+function leftOutLine(leftOut: readonly string[]): string {
+  return leftOut.length === 0 ? '' : ` Left out, as they look like secrets: ${leftOut.slice(0, 4).join(', ')}${leftOut.length > 4 ? ` and ${leftOut.length - 4} more` : ''}.`
+}
+
 /** Forks a stage of the open run: a checkpoint, two branches, road a on disk; the record remembers. */
 async function doFork($: EngineInterface, root: string, recordRel: string, levelGiven: string): Promise<{ text: string; fork?: RunFork }> {
   const record = await readRecord($, root, recordRel)
@@ -104,7 +148,9 @@ async function doFork($: EngineInterface, root: string, recordRel: string, level
   const level = stageOf(levelGiven)
   if (!/^\d+-\d+$/.test(level) || level === '0-0') return { text: 'Say which stage to fork, like 3-3.' }
   if (openFork(run)) return { text: `A fork is already open at ${openFork(run)?.level}; merge it first.` }
-  const made = await forkRoads($, root, level)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No fork: ${NOT_ASKED}.` }
+  const made = await forkRoads($, root, level, mode)
   if ('error' in made) return { text: `No fork: ${made.error}.` }
   run.roads = { ...(run.roads ?? {}), [level]: made }
   run.levels[`${level}a`] = 'open'
@@ -133,7 +179,9 @@ async function doRoad($: EngineInterface, root: string, recordRel: string, road:
   const fork = levelGiven ? run.roads?.[stageOf(levelGiven)] : openFork(run)
   if (!fork || fork.merged !== undefined) return { text: 'No open fork to switch.', ok: false }
   if (fork.onDisk === road) return { text: `Road ${road} of ${fork.level} is on disk already.`, ok: true }
-  const switched = await switchRoad($, root, fork, road)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No switch: ${NOT_ASKED}.`, ok: false }
+  const switched = await switchRoad($, root, fork, road, mode)
   if ('error' in switched) return { text: `No switch: ${switched.error}.`, ok: false }
   // The tree now holds the other road's record: join what this road knew into it.
   const after = await readRecord($, root, recordRel)
@@ -163,7 +211,9 @@ async function doMerge($: EngineInterface, root: string, recordRel: string, keep
   if (!run) return { text: 'No world is open.', ok: false }
   const fork = levelGiven ? run.roads?.[stageOf(levelGiven)] : openFork(run)
   if (!fork || fork.merged !== undefined) return { text: 'No open fork to merge.', ok: false }
-  const merged = await mergeRoads($, root, fork, keep)
+  const mode = await saveModeFor($, root)
+  if (mode === undefined) return { text: `No merge: ${NOT_ASKED}.`, ok: false }
+  const merged = await mergeRoads($, root, fork, keep, mode)
   if ('error' in merged) return { text: `No merge: ${merged.error}.`, ok: false }
   const kept: 'a' | 'b' = keep === 'b' ? 'b' : 'a'
   run.roads = { ...(run.roads ?? {}), [fork.level]: { ...fork, onDisk: kept, merged: keep, tag: merged.tag } }
@@ -177,7 +227,7 @@ const EXPLAIN_WORDS = new Set(['?', 'explain', 'help', 'why', 'more'])
 const SECTION_ID = 'siui:protocol'
 /** Every verb of /game, once: the command's description and hint and the usage line all read it. */
 const USAGE =
-  'on [pack] | off | status | board [off] | pane [off] | auto [on|off] | checkpoint [title] | fork [level] | road a|b | merge a|b|both | back | reset'
+  'on [pack] | off | status | board [link|off] | pane [off] | auto [on|off] | checkpoint [title] | fork [level] | road a|b | merge a|b|both | back | reset'
 const PANE = 'game-board'
 
 const card = atom({ plugin: 'siui', key: 'card' } as const, null)
@@ -254,12 +304,27 @@ async function openBoard($: EngineInterface, root: string): Promise<string> {
   if (port === undefined) return `The board server did not start; see ${paths.run}/server.log.`
   await $.store.set(`board:${root}`, true)
   startBoardTimers($, paths)
-  const isOpened = await openBrowser($, port)
+  const isOpened = await openBrowser($, paths, port)
   const url = `http://127.0.0.1:${port}/`
 
   return isOpened
     ? `Board at ${url}: cards are answered there while the page is open; close the tab to answer in the chat.`
-    : `Board at ${url}; open it in a browser. Cards are answered there while the page is open.`
+    : `Board at ${url}, not opened: no browser was found. Run /siui board link for a link that opens it with its key. Cards are answered there while the page is open.`
+}
+
+/** The link that holds the board's key, for the editor's own browser: `/siui board link`. It lasts as long as the server does. */
+async function boardLink($: EngineInterface, root: string): Promise<string> {
+  const paths = await boardPaths($, root)
+  const made = await readConfig($, root)
+  const port = await ensureServer($, paths, root, made.record, made.boardPort, made.chatLog)
+  if (port === undefined) return `The board server did not start; see ${paths.run}/server.log.`
+  await $.store.set(`board:${root}`, true)
+  startBoardTimers($, paths)
+  const link = await keyLink($, paths, port)
+
+  return link
+    ? `The board's link, with its key: ${link}\nIt is for the editor's own browser, or any browser /siui board did not open. It works until the board's server stops; the next start makes a new key. Keep it to yourself: whoever holds it can answer your cards and write to this chat.`
+    : `The board's key was not found in ${paths.run}; run /siui board off, then /siui board.`
 }
 
 /**
@@ -352,6 +417,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     const pack = rest[0]
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     let packPath: string | undefined
     if (pack) {
       const record = await readRecord($, root, config.record)
@@ -362,7 +428,10 @@ async function runCommand($: EngineInterface, e: { args: string }) {
       const nextWorld = record.runs.reduce((most, one) => Math.max(most, one.world), 0) + 1
       const run = ensureRun(record, targetOf(root), pack, nextWorld, new Date().toISOString())
       const plan = await readPlan($, pack, root, config.packs)
-      packPath = await findPack($, pack, root, config.packs)
+      // The path goes into the prompt only from a place the plugin knows by itself. A folder the project's
+      // configuration names could be named with a sentence for the assistant.
+      const found = await findPack($, pack, root, config.packs)
+      packPath = found !== undefined && packCandidates(pack, root, (await homeOf($)) ?? '', $.plugin.root, []).includes(found) ? found : undefined
       if (plan.length > 0) run.plan = plan
       await writeRecord($, root, record, config.record)
     }
@@ -420,6 +489,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
 
       return { text: 'Board stopped; close its browser tab.' }
     }
+    if ((rest[0] ?? '').toLowerCase() === 'link') return { text: await boardLink($, root) }
 
     return { text: await openBoard($, root) }
   }
@@ -450,7 +520,9 @@ async function runCommand($: EngineInterface, e: { args: string }) {
 
   if (word === 'checkpoint') {
     const title = rest.join(' ').trim() || `Checkpoint ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`
-    const saved = await saveCheckpoint($, root, title)
+    const mode = await saveModeFor($, root)
+    if (mode === undefined) return { text: `No checkpoint: ${NOT_ASKED}.` }
+    const saved = await saveCheckpoint($, root, title, mode)
     if ('error' in saved) return { text: `No checkpoint: ${saved.error}.` }
     const record = await readRecord($, root, config.record)
     const run = openRun(record) ?? lastWorldRun(record)
@@ -474,7 +546,7 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     await writeRecord($, root, record, config.record)
     await update($, history, list => [...list].slice(-200))
 
-    return { text: `Checkpoint saved: ${title} (${saved.commit.slice(0, 7)} on ${saved.branch}). Return to it from the board.` }
+    return { text: `Checkpoint saved: ${title} (${saved.commit.slice(0, 7)} on ${saved.branch}). Return to it from the board.${leftOutLine(saved.leftOut)}` }
   }
 
   if (word === 'pane') {
@@ -502,7 +574,13 @@ async function runCommand($: EngineInterface, e: { args: string }) {
     if (!dropped) return { text: 'Nothing to take back in this world yet.' }
     await writeRecord($, root, record, config.record)
     await update($, history, list => list.filter(one => !(one.level === dropped.level && one.id === dropped.id)))
-    void $.prompt.submit({ text: `Present the card ${dropped.level}/${dropped.id} (${dropped.title}) again, with no text before it.` })
+    // The card is named by its ids: its title is the record's text, and a prompt is read as the person's words.
+    const named = isLevel(dropped.level) && /^[a-z0-9-]{1,60}$/.test(dropped.id)
+    void $.prompt.submit({
+      text: named
+        ? `Present the card ${dropped.level}/${dropped.id} again, with no text before it.`
+        : 'I took back the last card I answered: present it again, with no text before it.',
+    })
 
     return { text: `Took back ${dropped.level}/${dropped.id}.` }
   }
@@ -576,11 +654,12 @@ export const register: Register = on => {
       description: `Game mode: decisions as cards. Bare, it opens the board. ${USAGE}`,
       argumentHint: USAGE,
     })
-    await $.command.register({ name: 'siui-board', description: 'Opens the Siui board in the browser (the same as /siui board)', argumentHint: '[off]' })
+    await $.command.register({ name: 'siui-board', description: 'Opens the Siui board in the browser (the same as /siui board)', argumentHint: '[link|off]' })
     // The project root, not the directory the process started in: the store keys and the record go by it.
     const root = await $.session.root()
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     const wasOn = (await $.store.get(storeKey(root))) === true
     await update($, isOn, () => wasOn)
     setMode(wasOn)
@@ -688,14 +767,27 @@ export const register: Register = on => {
       pendingUser = ''
       const where = await read($, progress)
       const root = await $.session.root()
-      await appendChat($, root, config.chatLog, {
-        world: where?.world ?? null,
-        level: where?.level ?? '',
-        user,
-        assistant: e.reason === 'refusal' ? '' : e.answer,
-      })
+      // Nothing is written into a project while game mode is off: no chat log, no mark, no cost.
+      const isPlaying = await read($, isOn)
+      if (isPlaying) {
+        // The ignore file beside the log is made sure of once per project on this machine: the run folder remembers.
+        const runFolder = (await boardPaths($, root)).run
+        const ignoreDone = (await launch($, ['folder', runFolder])).exitCode === 0 ? `${runFolder}/ignore-written` : undefined
+        await appendChat(
+          $,
+          root,
+          config.chatLog,
+          {
+            world: where?.world ?? null,
+            level: where?.level ?? '',
+            user,
+            assistant: e.reason === 'refusal' ? '' : e.answer,
+          },
+          ignoreDone,
+        )
+      }
       // A turn that did work after an answer marks that answer built: the board then offers no queue for it.
-      if (turnHadWork && (await read($, card)) === null) {
+      if (isPlaying && turnHadWork && (await read($, card)) === null) {
         const record = await readRecord($, root, config.record)
         let latest: GameDecision | undefined
         for (const run of record.runs) for (const one of run.decisions) {
@@ -712,8 +804,10 @@ export const register: Register = on => {
       offRequested = false
       // The turn's cost goes to the decision that was current.
       try {
-        const costs = await readRecord($, root, config.record)
-        if (await settleCost($, costs)) await writeRecord($, root, costs, config.record)
+        if (isPlaying) {
+          const costs = await readRecord($, root, config.record)
+          if (await settleCost($, costs)) await writeRecord($, root, costs, config.record)
+        }
       } catch {
         // the cost is a mirror of the session's ledger; a missed reading is caught up at the next
       }
@@ -874,7 +968,9 @@ export const register: Register = on => {
       event.to = { world: to.world, ...(isLevel(to.level) ? { level: to.level } : {}) }
     } else if (existing?.to) event.to = existing.to
     if (kind === 'checkpoint' && !existing) {
-      const saved = await saveCheckpoint($, root, title)
+      const mode = await saveModeFor($, root)
+      if (mode === undefined) return { result: JSON.stringify({ recorded: false, error: `no save point: ${NOT_ASKED}` }) }
+      const saved = await saveCheckpoint($, root, title, mode)
       if ('error' in saved) return { result: JSON.stringify({ recorded: false, error: saved.error }) }
       event.commit = saved.commit
       event.branch = saved.branch
@@ -934,6 +1030,7 @@ export const register: Register = on => {
     // The configuration is read afresh on every card: the board may have switched the universe meanwhile.
     config = await readConfig($, root)
     setWords(config.words)
+    keepOutOfCommits(config.chatLog)
     const made = normaliseCard(e as unknown as Record<string, unknown>, config.caps)
     if (typeof made === 'string') return { deny: `card: ${made}` }
 
@@ -1211,8 +1308,12 @@ export const register: Register = on => {
     await update($, progress, () => null)
     $.ui.toast(`World ${run2.world} complete`)
     // The applied world is a save point: a checkpoint at the commit the model just made.
-    const saved = await saveCheckpoint($, root, `World ${run2.world} applied`)
+    // No answer about new files, or git in the middle of a merge: the world is closed all the same, without a save point.
+    const mode = await saveModeFor($, root)
+    const saved = mode === undefined ? { error: NOT_ASKED } : await saveCheckpoint($, root, `World ${run2.world} applied`, mode)
+    if ('error' in saved) $.ui.toast(`No save point for world ${run2.world}: ${saved.error}`)
     if (!('error' in saved)) {
+      if (saved.leftOut.length > 0) $.ui.toast(`Save point made.${leftOutLine(saved.leftOut)}`)
       const now = new Date().toISOString()
       const bossLevel = (run2.plan ?? []).map(one => one.level).pop() ?? Object.keys(run2.levels).pop() ?? `${run2.world}-4`
       putEvent(record, {
